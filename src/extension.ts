@@ -6,8 +6,12 @@ export function activate(context: vscode.ExtensionContext) {
     const sidebarProvider = new SidebarProvider(context.extensionUri, {
         onOpenSettings: () => SettingsPanel.open(context.extensionUri),
         onOpenHome: () => HomePage.open(context.extensionUri),
-        onOpenWorkflow: () => WorkflowPanel.open(context.extensionUri),
+        onOpenWorkflow: () => { WorkflowPanel.open(context.extensionUri); sidebarProvider.exitAgentMode(); },
+        onOpenWorkflowDetail: (name: string) => { WorkflowDetailPanel.open(context.extensionUri, name); sidebarProvider.enterAgentMode(name); },
+        onBackToWorkflows: () => { WorkflowDetailPanel.close(); sidebarProvider.exitAgentMode(); WorkflowPanel.open(context.extensionUri); },
     });
+    WorkflowPanel.setOpenDetail((name: string) => { WorkflowDetailPanel.open(context.extensionUri, name); sidebarProvider.enterAgentMode(name); });
+    WorkflowDetailPanel.setOnBack(() => { sidebarProvider.exitAgentMode(); WorkflowPanel.open(context.extensionUri); });
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('helloWorldSidebarView', sidebarProvider)
@@ -20,6 +24,8 @@ interface SidebarCallbacks {
     onOpenSettings: () => void;
     onOpenHome: () => void;
     onOpenWorkflow: () => void;
+    onOpenWorkflowDetail: (name: string) => void;
+    onBackToWorkflows: () => void;
 }
 
 class SidebarProvider implements vscode.WebviewViewProvider {
@@ -30,11 +36,16 @@ class SidebarProvider implements vscode.WebviewViewProvider {
         this._callbacks = callbacks;
     }
 
+    private _webviewView: vscode.WebviewView | undefined;
+    private _agentMode: boolean = false;
+    private _agentWorkflowName: string = '';
+
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
         _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ) {
+        this._webviewView = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
             localResourceRoots: [this._extensionUri],
@@ -46,6 +57,8 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'home': this._callbacks.onOpenHome(); break;
                 case 'workflow': this._callbacks.onOpenWorkflow(); break;
                 case 'settings': this._callbacks.onOpenSettings(); break;
+                case 'open-workflow': this._callbacks.onOpenWorkflowDetail(message.name); break;
+                case 'back-to-workflows': this._callbacks.onBackToWorkflows(); break;
                 case 'new-project': vscode.window.showInformationMessage('New Project clicked!'); break;
                 case 'profile': vscode.window.showInformationMessage('Profile clicked!'); break;
                 case 'run-pipeline': vscode.window.showInformationMessage('Run Pipeline clicked!'); break;
@@ -57,7 +70,32 @@ class SidebarProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    public enterAgentMode(workflowName: string) {
+        this._agentMode = true;
+        this._agentWorkflowName = workflowName;
+        this._updateWebview();
+    }
+
+    public exitAgentMode() {
+        this._agentMode = false;
+        this._agentWorkflowName = '';
+        this._updateWebview();
+    }
+
+    private _updateWebview() {
+        if (this._webviewView) {
+            this._webviewView.webview.html = this._getHtmlForWebview();
+        }
+    }
+
     private _getHtmlForWebview(): string {
+        if (this._agentMode) {
+            return this._getAgentSidebarHtml();
+        }
+        return this._getNormalSidebarHtml();
+    }
+
+    private _getNormalSidebarHtml(): string {
         return /*html*/ `
         <!DOCTYPE html>
         <html class="dark" lang="en">
@@ -138,21 +176,21 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                 </div>
                 <div class="nav-section">
                     <div class="nav-group">
-                        <button class="nav-item active" onclick="handleClick('home',this)"><span class="material-symbols-outlined">home</span><span>Home</span></button>
-                        <button class="nav-item" onclick="handleClick('workflow',this)"><span class="material-symbols-outlined">account_tree</span><span>My Workflows</span></button>
-                        <button class="nav-item" onclick="handleClick('settings',this)"><span class="material-symbols-outlined">settings</span><span>Settings</span></button>
+                        <button class="nav-item active" onclick="handleClickNav('home',this)"><span class="material-symbols-outlined">home</span><span>Home</span></button>
+                        <button class="nav-item" onclick="handleClickNav('workflow',this)"><span class="material-symbols-outlined">account_tree</span><span>My Workflows</span></button>
+                        <button class="nav-item" onclick="handleClickNav('settings',this)"><span class="material-symbols-outlined">settings</span><span>Settings</span></button>
                     </div>
                     <div class="workflow-section">
                         <div class="section-label">Workflows</div>
-                        <div class="workflow-item" onclick="handleClick('workflow',this)">
+                        <div class="workflow-item" onclick="handleClickWF('open-workflow','E-Commerce Re-platform')">
                             <div class="wf-top"><span class="wf-name">E-Commerce Re-platform</span><div class="wf-status-running"></div></div>
                             <div class="wf-bottom"><span>Status: Running</span><span>2h ago</span></div>
                         </div>
-                        <div class="workflow-item" onclick="handleClick('workflow',this)">
+                        <div class="workflow-item" onclick="handleClickWF('open-workflow','FinTech Wallet API')">
                             <div class="wf-top"><span class="wf-name">FinTech Wallet API</span><div class="wf-status-completed"><span class="material-symbols-outlined">check_circle</span></div></div>
                             <div class="wf-bottom"><span>Status: Completed</span><span>Yesterday</span></div>
                         </div>
-                        <div class="workflow-item" onclick="handleClick('workflow',this)">
+                        <div class="workflow-item" onclick="handleClickWF('open-workflow','Patient Portal v2')">
                             <div class="wf-top"><span class="wf-name">Patient Portal v2</span><div class="wf-status-pending"></div></div>
                             <div class="wf-bottom"><span>Status: Pending</span><span>3 days ago</span></div>
                         </div>
@@ -177,7 +215,159 @@ class SidebarProvider implements vscode.WebviewViewProvider {
             </div>
             <script>
                 const vscode=acquireVsCodeApi();
-                function handleClick(command,element){vscode.postMessage({command:command});if(element&&element.classList.contains('nav-item')){document.querySelectorAll('.nav-item').forEach(i=>{i.classList.remove('active')});element.classList.add('active')}}
+                function handleClick(command){
+                    vscode.postMessage({command:command});
+                }
+                function handleClickNav(command,element){
+                    vscode.postMessage({command:command});
+                    document.querySelectorAll('.nav-item').forEach(function(i){i.classList.remove('active')});
+                    element.classList.add('active');
+                }
+                function handleClickWF(command,name){
+                    vscode.postMessage({command:command,name:name});
+                }
+                function handleClickBack(command){
+                    vscode.postMessage({command:command});
+                }
+            </script>
+        </body>
+        </html>`;
+    }
+
+    private _getAgentSidebarHtml(): string {
+        const wfName = this._agentWorkflowName;
+        return /*html*/ `
+        <!DOCTYPE html>
+        <html class="dark" lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Genesis Agent</title>
+            <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+            <style>
+                *{margin:0;padding:0;box-sizing:border-box}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
+                body{background-color:#131313;color:#e5e2e1;font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+                ::-webkit-scrollbar{width:4px;height:4px}
+                ::-webkit-scrollbar-track{background:transparent}
+                ::-webkit-scrollbar-thumb{background:#404752;border-radius:10px}
+                ::-webkit-scrollbar-thumb:hover{background:#505866}
+                .agent{display:flex;flex-direction:column;height:100%;background-color:#1B1B1C}
+
+                /* AGENT HEADER */
+                .agent-header{padding:16px 16px 12px;display:flex;flex-direction:column;gap:10px}
+                .back-row{display:flex;align-items:center;gap:8px}
+                .back-btn{display:flex;align-items:center;gap:6px;padding:6px 12px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .back-btn:hover{background:#353535;color:#e5e2e1}
+                .back-btn .material-symbols-outlined{font-size:16px}
+                .agent-title{display:flex;align-items:center;gap:10px}
+                .agent-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#A3C9FF,#0078D4);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+                .agent-avatar .material-symbols-outlined{font-size:18px;color:#131313}
+                .agent-title-text h2{font-family:'Space Grotesk',sans-serif;font-size:.8125rem;font-weight:700;color:#e5e2e1;line-height:1.2}
+                .agent-title-text p{font-size:.5625rem;color:#8a919e}
+                .agent-wf-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;background:rgba(97,218,193,.08);border:1px solid rgba(97,218,193,.15);border-radius:9999px;margin-left:auto}
+                .agent-wf-badge .awb-dot{width:6px;height:6px;border-radius:50%;background:#61dac1;animation:blink 2s infinite}
+                @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+                .agent-wf-badge span{font-size:.5625rem;color:#61dac1;font-weight:600}
+
+                /* CONVERSATION */
+                .convo{flex:1;overflow-y:auto;padding:0 16px 16px;display:flex;flex-direction:column;gap:14px}
+                .msg{display:flex;gap:10px}
+                .msg-avatar{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+                .msg-avatar.ma-agent{background:linear-gradient(135deg,#A3C9FF,#0078D4)}
+                .msg-avatar.ma-user{background:#353535}
+                .msg-avatar .material-symbols-outlined{font-size:14px;color:#131313}
+                .msg-avatar.ma-user .material-symbols-outlined{color:#C0C7D4}
+                .msg-bubble{background:#202020;border-radius:0 10px 10px 10px;padding:12px 14px;max-width:calc(100% - 36px);font-size:.75rem;line-height:1.6;color:#C0C7D4}
+                .msg-bubble strong{color:#e5e2e1;font-weight:600}
+                .msg-bubble code{font-family:'Fira Code',monospace;font-size:.6875rem;background:#0E0E0E;padding:1px 5px;border-radius:3px;color:#A3C9FF}
+                .msg-bubble.mb-user{background:rgba(163,201,255,.08);border-radius:10px 0 10px 10px;border:1px solid rgba(163,201,255,.1);margin-left:auto}
+                .msg-time{font-size:.5rem;color:#8a919e;margin-top:4px;padding-left:36px}
+                .msg-time.right{text-align:right;padding-left:0;padding-right:0}
+
+                /* INPUT AREA */
+                .input-area{padding:12px 16px;border-top:1px solid rgba(64,71,82,.1)}
+                .input-box{display:flex;align-items:center;gap:8px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:8px;padding:10px 12px;transition:border-color .15s ease}
+                .input-box:focus-within{border-color:rgba(163,201,255,.3)}
+                .input-box input{flex:1;background:transparent;border:none;outline:none;color:#e5e2e1;font-size:.75rem;font-family:'Inter',sans-serif}
+                .input-box input::placeholder{color:#8a919e}
+                .input-box .send-btn{width:28px;height:28px;border-radius:6px;background:linear-gradient(180deg,#A3C9FF,#0078D4);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:opacity .15s ease;flex-shrink:0}
+                .input-box .send-btn:hover{opacity:.85}
+                .input-box .send-btn .material-symbols-outlined{font-size:16px;color:#fff}
+                .input-hint{text-align:center;padding-top:6px;font-size:.5rem;color:#8a919e}
+            </style>
+        </head>
+        <body>
+            <div class="agent">
+                <div class="agent-header">
+                    <div class="back-row">
+                        <button class="back-btn" onclick="handleClick('back-to-workflows')">
+                            <span class="material-symbols-outlined">arrow_back</span>
+                            Back to Workflows
+                        </button>
+                        <div class="agent-wf-badge"><div class="awb-dot"></div><span>Active</span></div>
+                    </div>
+                    <div class="agent-title">
+                        <div class="agent-avatar"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div class="agent-title-text">
+                            <h2>Genesis Agent</h2>
+                            <p>Working on ${wfName}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="convo">
+                    <!-- Agent greeting -->
+                    <div class="msg">
+                        <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div>
+                            <div class="msg-bubble">
+                                Welcome to <strong>${wfName}</strong> workflow! 🚀<br><br>
+                                I'm your Genesis AI agent. I'll help you orchestrate the SDLC pipeline, generate documentation, and manage the entire lifecycle.<br><br>
+                                The pipeline is currently <strong>running</strong> — Phase 02 (Architectural Planning) is active at <code>78%</code> completion.<br><br>
+                                What would you like to do?
+                            </div>
+                            <div class="msg-time">just now</div>
+                        </div>
+                    </div>
+
+                    <!-- User message -->
+                    <div class="msg">
+                        <div class="msg-bubble mb-user">
+                            Show me the current pipeline status
+                        </div>
+                        <div class="msg-time right">just now</div>
+                    </div>
+
+                    <!-- Agent reply -->
+                    <div class="msg">
+                        <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div>
+                            <div class="msg-bubble">
+                                Here's the current status for <strong>${wfName}</strong>:<br><br>
+                                ✅ <strong>Phase 01</strong> — Strategic Foundation <code>100%</code><br>
+                                🔄 <strong>Phase 02</strong> — Architectural Planning <code>78%</code><br>
+                                ⏳ <strong>Phase 03</strong> — Technical Implementation <code>Queued</code><br>
+                                ⏸ <strong>Phase 04</strong> — Design & Delivery <code>Pending</code><br><br>
+                                Overall progress: <code>45%</code> · ETA: <code>~4 min</code>
+                            </div>
+                            <div class="msg-time">just now</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="input-area">
+                    <div class="input-box">
+                        <input type="text" placeholder="Ask Genesis anything about this workflow..." id="agent-input">
+                        <button class="send-btn"><span class="material-symbols-outlined">arrow_upward</span></button>
+                    </div>
+                    <div class="input-hint">Genesis v1.0 · Press Enter to send</div>
+                </div>
+            </div>
+            <script>
+                const vscode=acquireVsCodeApi();
+                function handleClick(cmd){vscode.postMessage({command:cmd})}
             </script>
         </body>
         </html>`;
@@ -780,6 +970,9 @@ class SettingsPanel {
 class WorkflowPanel {
     public static currentPanel: WorkflowPanel | undefined;
     private _panel: vscode.WebviewPanel;
+    private static _openDetail: ((name: string) => void) | undefined;
+
+    public static setOpenDetail(cb: (name: string) => void) { WorkflowPanel._openDetail = cb; }
 
     private constructor(panel: vscode.WebviewPanel) {
         this._panel = panel;
@@ -788,7 +981,7 @@ class WorkflowPanel {
         this._panel.onDidDispose(() => { WorkflowPanel.currentPanel = undefined; });
         this._panel.webview.onDidReceiveMessage(message => {
             switch (message.command) {
-                case 'open-workflow': vscode.window.showInformationMessage('Open workflow: ' + message.name); break;
+                case 'open-workflow': if (WorkflowPanel._openDetail) WorkflowPanel._openDetail(message.name); break;
                 case 'new-workflow': vscode.window.showInformationMessage('New workflow created!'); break;
                 case 'delete-workflow': vscode.window.showWarningMessage('Delete workflow: ' + message.name + '?'); break;
             }
@@ -1134,3 +1327,155 @@ class WorkflowPanel {
 }
 
 export function deactivate() {}
+
+// ==================== WORKFLOW DETAIL PANEL ====================
+
+class WorkflowDetailPanel {
+    public static currentPanel: WorkflowDetailPanel | undefined;
+    private _panel: vscode.WebviewPanel;
+    private static _onBack: (() => void) | undefined;
+
+    public static setOnBack(cb: () => void) { WorkflowDetailPanel._onBack = cb; }
+
+    private constructor(panel: vscode.WebviewPanel, name: string) {
+        this._panel = panel;
+        panel.webview.html = this._getHtml(name);
+        this._panel.onDidDispose(() => { WorkflowDetailPanel.currentPanel = undefined; });
+        this._panel.webview.onDidReceiveMessage(message => {
+            switch (message.command) {
+                case 'back-to-workflows':
+                    this._panel.dispose();
+                    if (WorkflowDetailPanel._onBack) WorkflowDetailPanel._onBack();
+                    break;
+            }
+        });
+    }
+
+    public static open(extensionUri: vscode.Uri, name: string) {
+        if (WorkflowDetailPanel.currentPanel) { WorkflowDetailPanel.currentPanel._panel.dispose(); }
+        const panel = vscode.window.createWebviewPanel('genesis-workflow-detail', name, vscode.ViewColumn.One, {
+            enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [extensionUri]
+        });
+        WorkflowDetailPanel.currentPanel = new WorkflowDetailPanel(panel, name);
+    }
+
+    public static close() {
+        if (WorkflowDetailPanel.currentPanel) {
+            WorkflowDetailPanel.currentPanel._panel.dispose();
+        }
+    }
+
+    private _getHtml(name: string): string {
+        return /*html*/ `
+        <!DOCTYPE html>
+        <html class="dark" lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>${name}</title>
+            <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+            <style>
+                *{margin:0;padding:0;box-sizing:border-box}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
+                body{font-family:'Inter',sans-serif;background-color:#131313;color:#e5e2e1;margin:0;height:100vh;display:flex;flex-direction:column}
+                ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#353535;border-radius:10px}::-webkit-scrollbar-thumb:hover{background:#404751}
+                .page{flex:1;display:flex;flex-direction:column;gap:12px;padding:16px 20px}
+
+                /* WELCOME STRIP */
+                .welcome-strip{display:flex;align-items:center;gap:14px;padding:16px 20px;background:#1B1B1C;border-radius:8px;border:1px solid rgba(64,71,82,.08);flex-shrink:0}
+                .ws-back{display:flex;align-items:center;gap:6px;padding:6px 14px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .ws-back:hover{background:#353535;color:#e5e2e1}
+                .ws-back .material-symbols-outlined{font-size:16px}
+                .ws-info{flex:1}
+                .ws-info h1{font-family:'Space Grotesk',sans-serif;font-size:1rem;font-weight:700;color:#e5e2e1}
+                .ws-info p{font-size:.6875rem;color:#8a919e}
+                .ws-badge{display:flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(97,218,193,.08);border:1px solid rgba(97,218,193,.15);border-radius:9999px}
+                .ws-dot{width:8px;height:8px;border-radius:50%;background:#61dac1;animation:blink 2s infinite}
+                @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+                .ws-badge span{font-size:.625rem;color:#61dac1;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+
+                /* WELCOME CARD */
+                .welcome-card{flex:1;background:#1B1B1C;border-radius:10px;border:1px solid rgba(64,71,82,.08);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 40px;gap:20px}
+                .wc-icon{width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,rgba(163,201,255,.15),rgba(0,120,212,.15));display:flex;align-items:center;justify-content:center}
+                .wc-icon .material-symbols-outlined{font-size:32px;color:#A3C9FF}
+                .wc-title{font-family:'Space Grotesk',sans-serif;font-size:1.5rem;font-weight:700;color:#e5e2e1}
+                .wc-desc{font-size:.875rem;color:#8a919e;max-width:440px;line-height:1.6}
+                .wc-desc strong{color:#C0C7D4}
+                .wc-status{display:flex;align-items:center;gap:8px;padding:8px 20px;background:rgba(0,120,212,.08);border:1px solid rgba(163,201,255,.12);border-radius:9999px}
+                .wc-status .material-symbols-outlined{font-size:18px;color:#A3C9FF;animation:spin 2s linear infinite}
+                @keyframes spin{to{transform:rotate(360deg)}}
+                .wc-status span{font-size:.75rem;color:#A3C9FF;font-weight:600}
+
+                /* QUICK STATS */
+                .quick-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex-shrink:0}
+                .qs-card{background:#1B1B1C;border-radius:8px;padding:16px;text-align:center;border:1px solid rgba(64,71,82,.08)}
+                .qs-val{font-family:'Space Grotesk',sans-serif;font-size:1.25rem;font-weight:700;color:#e5e2e1}
+                .qs-val.green{color:#61dac1}
+                .qs-val.blue{color:#A3C9FF}
+                .qs-lbl{font-size:.5625rem;color:#8a919e;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+
+                /* ACTIONS */
+                .actions-row{display:flex;gap:10px;flex-shrink:0}
+                .act-btn{display:flex;align-items:center;gap:8px;padding:10px 20px;border-radius:6px;font-size:.75rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif;border:none}
+                .act-btn:hover{transform:translateY(-1px)}
+                .act-btn .material-symbols-outlined{font-size:16px}
+                .ab-primary{background:linear-gradient(180deg,#A3C9FF,#0078D4);color:#fff}
+                .ab-secondary{background:#202020;color:#C0C7D4;border:1px solid rgba(64,71,82,.15)}
+                .ab-secondary:hover{background:#353535;color:#e5e2e1}
+                .ab-danger{background:rgba(255,180,171,.08);color:#ffb4ab;border:1px solid rgba(255,180,171,.15)}
+            </style>
+        </head>
+        <body>
+            <div class="page">
+                <!-- WELCOME STRIP -->
+                <div class="welcome-strip">
+                    <button class="ws-back" onclick="handleAction('back-to-workflows')">
+                        <span class="material-symbols-outlined">arrow_back</span>
+                        Back
+                    </button>
+                    <div class="ws-info">
+                        <h1>${name}</h1>
+                        <p>AI-powered SDLC pipeline workflow</p>
+                    </div>
+                    <div class="ws-badge"><div class="ws-dot"></div><span>Running</span></div>
+                </div>
+
+                <!-- WELCOME CARD -->
+                <div class="welcome-card">
+                    <div class="wc-icon"><span class="material-symbols-outlined">account_tree</span></div>
+                    <div class="wc-title">Welcome to ${name}</div>
+                    <div class="wc-desc">
+                        Your AI pipeline is <strong>active</strong> and being orchestrated by Genesis.
+                        Phase 02 (Architectural Planning) is currently in progress at <strong>78%</strong> completion.
+                    </div>
+                    <div class="wc-status">
+                        <span class="material-symbols-outlined">sync</span>
+                        <span>Pipeline is running — Phase 02 orchestrating...</span>
+                    </div>
+                </div>
+
+                <!-- QUICK STATS -->
+                <div class="quick-stats">
+                    <div class="qs-card"><div class="qs-val blue">2</div><div class="qs-lbl">Phases Done</div></div>
+                    <div class="qs-card"><div class="qs-val">4</div><div class="qs-lbl">Total Phases</div></div>
+                    <div class="qs-card"><div class="qs-val green">78%</div><div class="qs-lbl">Current Phase</div></div>
+                    <div class="qs-card"><div class="qs-val">~4m</div><div class="qs-lbl">ETA Remaining</div></div>
+                </div>
+
+                <!-- ACTIONS -->
+                <div class="actions-row">
+                    <button class="act-btn ab-primary"><span class="material-symbols-outlined">play_arrow</span>Run Pipeline</button>
+                    <button class="act-btn ab-secondary"><span class="material-symbols-outlined">pause</span>Pause</button>
+                    <button class="act-btn ab-secondary"><span class="material-symbols-outlined">ios_share</span>Export</button>
+                    <button class="act-btn ab-danger"><span class="material-symbols-outlined">stop</span>Stop</button>
+                </div>
+            </div>
+            <script>
+                const vscode=acquireVsCodeApi();
+                function handleAction(c){vscode.postMessage({command:c})}
+            </script>
+        </body>
+        </html>`;
+    }
+}
