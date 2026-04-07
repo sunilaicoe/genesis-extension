@@ -1,7 +1,7 @@
 {
-  "name": "hello-world",
-  "displayName": "Hello World Extension",
-  "description": "A VS Code extension with sidebar navigation",
+  "name": "genesis-voice-agent",
+  "displayName": "Genesis AI - SDLC Architect",
+  "description": "AI-powered Software Development Lifecycle architect with workflow orchestration, document generation, and pipeline management.",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"

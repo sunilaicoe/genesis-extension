@@ -9,9 +9,24 @@ export function activate(context: vscode.ExtensionContext) {
         onOpenWorkflow: () => { WorkflowPanel.open(context.extensionUri); sidebarProvider.exitAgentMode(); },
         onOpenWorkflowDetail: (name: string) => { WorkflowDetailPanel.open(context.extensionUri, name); sidebarProvider.enterAgentMode(name); },
         onBackToWorkflows: () => { WorkflowDetailPanel.close(); sidebarProvider.exitAgentMode(); WorkflowPanel.open(context.extensionUri); },
+        onNewProject: () => NewWorkflowModal.open(context.extensionUri),
     });
     WorkflowPanel.setOpenDetail((name: string) => { WorkflowDetailPanel.open(context.extensionUri, name); sidebarProvider.enterAgentMode(name); });
     WorkflowDetailPanel.setOnBack(() => { sidebarProvider.exitAgentMode(); WorkflowPanel.open(context.extensionUri); });
+    WorkflowPanel.setNewWorkflow(() => NewWorkflowModal.open(context.extensionUri));
+
+    WorkflowDetailPanel.setOnViewDocument((wfName, docName) => { DocumentPreviewPanel.open(context.extensionUri, wfName, docName); });
+    WorkflowDetailPanel.setOnOpenEditor((name) => { WorkflowEditorPanel.open(context.extensionUri, name); });
+    WorkflowDetailPanel.setOnExport((name) => { ExportDialogModal.open(context.extensionUri, name); });
+    WorkflowDetailPanel.setOnNewProject(() => NewWorkflowModal.open(context.extensionUri));
+
+    NewWorkflowModal.setOnCreate((name) => {
+        WorkflowDetailPanel.open(context.extensionUri, name);
+        sidebarProvider.enterAgentMode(name);
+    });
+
+    WorkflowEditorPanel.setOnViewDocument((wfName, docName) => { DocumentPreviewPanel.open(context.extensionUri, wfName, docName); });
+    WorkflowEditorPanel.setOnExport((name) => { ExportDialogModal.open(context.extensionUri, name); });
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('helloWorldSidebarView', sidebarProvider)
@@ -26,6 +41,7 @@ interface SidebarCallbacks {
     onOpenWorkflow: () => void;
     onOpenWorkflowDetail: (name: string) => void;
     onBackToWorkflows: () => void;
+    onNewProject: () => void;
 }
 
 class SidebarProvider implements vscode.WebviewViewProvider {
@@ -58,14 +74,14 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                 case 'workflow': this._callbacks.onOpenWorkflow(); break;
                 case 'settings': this._callbacks.onOpenSettings(); break;
                 case 'open-workflow': this._callbacks.onOpenWorkflowDetail(message.name); break;
-                case 'back-to-workflows': this._callbacks.onBackToWorkflows(); break;
-                case 'new-project': vscode.window.showInformationMessage('New Project clicked!'); break;
-                case 'profile': vscode.window.showInformationMessage('Profile clicked!'); break;
-                case 'run-pipeline': vscode.window.showInformationMessage('Run Pipeline clicked!'); break;
-                case 'export-all': vscode.window.showInformationMessage('Export All clicked!'); break;
-                case 'view-logs': vscode.window.showInformationMessage('View Logs clicked!'); break;
-                case 'help': vscode.window.showInformationMessage('Help clicked!'); break;
-                case 'status': vscode.window.showInformationMessage('Status clicked!'); break;
+                case 'back-to-workflows': this._confirmBackFromAgent(); break;
+                case 'new-project': this._callbacks.onNewProject(); break;
+                case 'profile': vscode.window.showInformationMessage('👤 John Doe', 'john@genesis.io · Online'); break;
+                case 'run-pipeline': vscode.window.showInformationMessage('Run Pipeline', 'Pipeline execution started for active workflow.'); break;
+                case 'export-all': vscode.window.showInformationMessage('Export All', 'All artifacts exported to /genesis/exports/'); break;
+                case 'view-logs': vscode.window.showInformationMessage('View Logs', 'Opening terminal output panel...'); break;
+                case 'help': vscode.window.showInformationMessage('Genesis Help', 'Documentation: https://genesis.ai/docs'); break;
+                case 'status': vscode.window.showInformationMessage('Status', '✅ Connected to Genesis Cloud · Ollama v0.1.28 · All systems operational'); break;
             }
         });
     }
@@ -80,6 +96,14 @@ class SidebarProvider implements vscode.WebviewViewProvider {
         this._agentMode = false;
         this._agentWorkflowName = '';
         this._updateWebview();
+    }
+
+    private _confirmBackFromAgent() {
+        vscode.window.showWarningMessage('Are you sure you want to go back to the Workflows list? Unsaved agent conversation will be lost.', { modal: true }, 'Yes', 'No').then(selection => {
+            if (selection === 'Yes') {
+                this._callbacks.onBackToWorkflows();
+            }
+        });
     }
 
     private _updateWebview() {
@@ -248,12 +272,12 @@ class SidebarProvider implements vscode.WebviewViewProvider {
             <style>
                 *{margin:0;padding:0;box-sizing:border-box}
                 .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
-                body{background-color:#131313;color:#e5e2e1;font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+                body{background-color:#131313;color:#e5e2e1;font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100%;overflow:hidden;position:absolute;inset:0}
                 ::-webkit-scrollbar{width:4px;height:4px}
                 ::-webkit-scrollbar-track{background:transparent}
                 ::-webkit-scrollbar-thumb{background:#404752;border-radius:10px}
                 ::-webkit-scrollbar-thumb:hover{background:#505866}
-                .agent{display:flex;flex-direction:column;height:100%;background-color:#1B1B1C}
+                .agent{display:flex;flex-direction:column;height:100%;min-height:0;background-color:#1B1B1C}
 
                 /* AGENT HEADER */
                 .agent-header{padding:16px 16px 12px;display:flex;flex-direction:column;gap:10px}
@@ -328,19 +352,17 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                                 The pipeline is currently <strong>running</strong> — Phase 02 (Architectural Planning) is active at <code>78%</code> completion.<br><br>
                                 What would you like to do?
                             </div>
-                            <div class="msg-time">just now</div>
+                            <div class="msg-time">2 min ago</div>
                         </div>
                     </div>
 
-                    <!-- User message -->
+                    <!-- User message 1 -->
                     <div class="msg">
-                        <div class="msg-bubble mb-user">
-                            Show me the current pipeline status
-                        </div>
-                        <div class="msg-time right">just now</div>
+                        <div class="msg-bubble mb-user">Show me the current pipeline status</div>
+                        <div class="msg-time right">2 min ago</div>
                     </div>
 
-                    <!-- Agent reply -->
+                    <!-- Agent reply 1 -->
                     <div class="msg">
                         <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
                         <div>
@@ -351,6 +373,100 @@ class SidebarProvider implements vscode.WebviewViewProvider {
                                 ⏳ <strong>Phase 03</strong> — Technical Implementation <code>Queued</code><br>
                                 ⏸ <strong>Phase 04</strong> — Design & Delivery <code>Pending</code><br><br>
                                 Overall progress: <code>45%</code> · ETA: <code>~4 min</code>
+                            </div>
+                            <div class="msg-time">2 min ago</div>
+                        </div>
+                    </div>
+
+                    <!-- User message 2 -->
+                    <div class="msg">
+                        <div class="msg-bubble mb-user">What documents have been generated so far?</div>
+                        <div class="msg-time right">1 min ago</div>
+                    </div>
+
+                    <!-- Agent reply 2 -->
+                    <div class="msg">
+                        <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div>
+                            <div class="msg-bubble">
+                                Here are the completed and in-progress documents:<br><br>
+                                ✅ <strong>Vision & Strategy</strong> — Strategic alignment & business goals<br>
+                                ✅ <strong>User Personas</strong> — 4 core archetypes defined<br>
+                                ✅ <strong>Product Roadmap</strong> — 6-month delivery timeline<br>
+                                ✅ <strong>GTM Strategy</strong> — Market positioning & channels<br>
+                                🔄 <strong>Strategic Use Cases</strong> — Currently generating...<br>
+                                🔄 <strong>UI Flows & Navigation</strong> — Currently generating...<br><br>
+                                <code>4/20</code> documents complete · <code>2</code> in progress
+                            </div>
+                            <div class="msg-time">1 min ago</div>
+                        </div>
+                    </div>
+
+                    <!-- User message 3 -->
+                    <div class="msg">
+                        <div class="msg-bubble mb-user">Can you prioritize the security specification? We need compliance docs first.</div>
+                        <div class="msg-time right">45s ago</div>
+                    </div>
+
+                    <!-- Agent reply 3 -->
+                    <div class="msg">
+                        <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div>
+                            <div class="msg-bubble">
+                                Good call! I've reordered the pipeline to prioritize security-related artifacts:<br><br>
+                                <strong>New execution order:</strong><br>
+                                1. <code>Security Specification</code> — moved to next<br>
+                                2. <code>Functional Requirements</code> — queued<br>
+                                3. <code>Testing Strategy</code> — after functional specs<br><br>
+                                This ensures HIPAA/PCI-DSS compliance constraints are captured before technical implementation begins.r><br>
+                                ⚡ Priority updated. Security Spec will start in <code>~30s</code>.
+                            </div>
+                            <div class="msg-time">40s ago</div>
+                        </div>
+                    </div>
+
+                    <!-- User message 4 -->
+                    <div class="msg">
+                        <div class="msg-bubble mb-user">What AI model is being used for generation?</div>
+                        <div class="msg-time right">20s ago</div>
+                    </div>
+
+                    <!-- Agent reply 4 -->
+                    <div class="msg">
+                        <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div>
+                            <div class="msg-bubble">
+                                Currently using <strong>Codellama 13B</strong> via local Ollama instance for all document generation.<br><br>
+                                📊 <strong>Model stats:</strong><br>
+                                · Tokens consumed: <code>124,502</code><br>
+                                · Avg latency: <code>142ms</code><br>
+                                · Region: <code>US-East-1</code><br>
+                                · Temperature: <code>0.7</code><br><br>
+                                You can switch models in <strong>Settings → AI Provider</strong>.
+                            </div>
+                            <div class="msg-time">15s ago</div>
+                        </div>
+                    </div>
+
+                    <!-- User message 5 -->
+                    <div class="msg">
+                        <div class="msg-bubble mb-user">Export the completed documents as PDF when ready</div>
+                        <div class="msg-time right">5s ago</div>
+                    </div>
+
+                    <!-- Agent reply 5 -->
+                    <div class="msg">
+                        <div class="msg-avatar ma-agent"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div>
+                            <div class="msg-bubble">
+                                I'll queue a PDF export for all completed documents once the current batch finishes.<br><br>
+                                📦 <strong>Export queue:</strong><br>
+                                · Vision & Strategy → PDF<br>
+                                · User Personas → PDF<br>
+                                · Product Roadmap → PDF<br>
+                                · GTM Strategy → PDF<br><br>
+                                Output: <code>/Users/user/Desktop/Genesis_Exports/${wfName}/</code><br>
+                                Status: <code>Waiting for pipeline checkpoint...</code>
                             </div>
                             <div class="msg-time">just now</div>
                         </div>
@@ -971,8 +1087,10 @@ class WorkflowPanel {
     public static currentPanel: WorkflowPanel | undefined;
     private _panel: vscode.WebviewPanel;
     private static _openDetail: ((name: string) => void) | undefined;
+    private static _newWorkflow: (() => void) | undefined;
 
     public static setOpenDetail(cb: (name: string) => void) { WorkflowPanel._openDetail = cb; }
+    public static setNewWorkflow(cb: () => void) { WorkflowPanel._newWorkflow = cb; }
 
     private constructor(panel: vscode.WebviewPanel) {
         this._panel = panel;
@@ -982,7 +1100,7 @@ class WorkflowPanel {
         this._panel.webview.onDidReceiveMessage(message => {
             switch (message.command) {
                 case 'open-workflow': if (WorkflowPanel._openDetail) WorkflowPanel._openDetail(message.name); break;
-                case 'new-workflow': vscode.window.showInformationMessage('New workflow created!'); break;
+                case 'new-workflow': if (WorkflowPanel._newWorkflow) WorkflowPanel._newWorkflow(); break;
                 case 'delete-workflow': vscode.window.showWarningMessage('Delete workflow: ' + message.name + '?'); break;
             }
         });
@@ -1326,16 +1444,25 @@ class WorkflowPanel {
     }
 }
 
+
 export function deactivate() {}
 
-// ==================== WORKFLOW DETAIL PANEL ====================
+// ==================== WORKFLOW DETAIL PANEL (Enhanced Pipeline View) ====================
 
 class WorkflowDetailPanel {
     public static currentPanel: WorkflowDetailPanel | undefined;
     private _panel: vscode.WebviewPanel;
     private static _onBack: (() => void) | undefined;
+    private static _onViewDocument: ((wfName: string, docName: string) => void) | undefined;
+    private static _onOpenEditor: ((name: string) => void) | undefined;
+    private static _onExport: ((name: string) => void) | undefined;
+    private static _onNewProject: (() => void) | undefined;
 
     public static setOnBack(cb: () => void) { WorkflowDetailPanel._onBack = cb; }
+    public static setOnViewDocument(cb: (wfName: string, docName: string) => void) { WorkflowDetailPanel._onViewDocument = cb; }
+    public static setOnOpenEditor(cb: (name: string) => void) { WorkflowDetailPanel._onOpenEditor = cb; }
+    public static setOnExport(cb: (name: string) => void) { WorkflowDetailPanel._onExport = cb; }
+    public static setOnNewProject(cb: () => void) { WorkflowDetailPanel._onNewProject = cb; }
 
     private constructor(panel: vscode.WebviewPanel, name: string) {
         this._panel = panel;
@@ -1343,10 +1470,14 @@ class WorkflowDetailPanel {
         this._panel.onDidDispose(() => { WorkflowDetailPanel.currentPanel = undefined; });
         this._panel.webview.onDidReceiveMessage(message => {
             switch (message.command) {
-                case 'back-to-workflows':
-                    this._panel.dispose();
-                    if (WorkflowDetailPanel._onBack) WorkflowDetailPanel._onBack();
-                    break;
+                case 'back-to-workflows': this._confirmBack(); break;
+                case 'view-document': if (WorkflowDetailPanel._onViewDocument) WorkflowDetailPanel._onViewDocument(name, message.doc); break;
+                case 'open-editor': if (WorkflowDetailPanel._onOpenEditor) WorkflowDetailPanel._onOpenEditor(name); break;
+                case 'export': if (WorkflowDetailPanel._onExport) WorkflowDetailPanel._onExport(name); break;
+                case 'new-project': if (WorkflowDetailPanel._onNewProject) WorkflowDetailPanel._onNewProject(); break;
+                case 'run-pipeline': vscode.window.showInformationMessage('Pipeline started for ' + name); break;
+                case 'pause-pipeline': vscode.window.showInformationMessage('Pipeline paused'); break;
+                case 'stop-pipeline': vscode.window.showWarningMessage('Stop pipeline?', { modal: true }, 'Stop', 'Cancel').then(s => { if (s === 'Stop') vscode.window.showInformationMessage('Pipeline stopped'); }); break;
             }
         });
     }
@@ -1360,9 +1491,13 @@ class WorkflowDetailPanel {
     }
 
     public static close() {
-        if (WorkflowDetailPanel.currentPanel) {
-            WorkflowDetailPanel.currentPanel._panel.dispose();
-        }
+        if (WorkflowDetailPanel.currentPanel) { WorkflowDetailPanel.currentPanel._panel.dispose(); }
+    }
+
+    private _confirmBack() {
+        vscode.window.showWarningMessage('Go back to Workflows list? Unsaved changes may be lost.', { modal: true }, 'Yes', 'No').then(s => {
+            if (s === 'Yes') { this._panel.dispose(); if (WorkflowDetailPanel._onBack) WorkflowDetailPanel._onBack(); }
+        });
     }
 
     private _getHtml(name: string): string {
@@ -1376,104 +1511,1422 @@ class WorkflowDetailPanel {
             <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
             <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
             <style>
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
                 *{margin:0;padding:0;box-sizing:border-box}
-                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;font-family:'Material Symbols Outlined'}
                 body{font-family:'Inter',sans-serif;background-color:#131313;color:#e5e2e1;margin:0;height:100vh;display:flex;flex-direction:column}
                 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#353535;border-radius:10px}::-webkit-scrollbar-thumb:hover{background:#404751}
-                .page{flex:1;display:flex;flex-direction:column;gap:12px;padding:16px 20px}
+                .page{flex:1;display:flex;flex-direction:column;gap:16px;padding:16px 20px;overflow-y:auto;min-height:0}
 
-                /* WELCOME STRIP */
-                .welcome-strip{display:flex;align-items:center;gap:14px;padding:16px 20px;background:#1B1B1C;border-radius:8px;border:1px solid rgba(64,71,82,.08);flex-shrink:0}
-                .ws-back{display:flex;align-items:center;gap:6px;padding:6px 14px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
-                .ws-back:hover{background:#353535;color:#e5e2e1}
-                .ws-back .material-symbols-outlined{font-size:16px}
-                .ws-info{flex:1}
-                .ws-info h1{font-family:'Space Grotesk',sans-serif;font-size:1rem;font-weight:700;color:#e5e2e1}
-                .ws-info p{font-size:.6875rem;color:#8a919e}
-                .ws-badge{display:flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(97,218,193,.08);border:1px solid rgba(97,218,193,.15);border-radius:9999px}
-                .ws-dot{width:8px;height:8px;border-radius:50%;background:#61dac1;animation:blink 2s infinite}
+                /* HEADER */
+                .header{display:flex;align-items:center;gap:14px;padding:16px 20px;background:#1B1B1C;border-radius:8px;border:1px solid rgba(64,71,82,.08);flex-shrink:0}
+                .back-btn{display:flex;align-items:center;gap:6px;padding:6px 14px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .back-btn:hover{background:#353535;color:#e5e2e1}
+                .back-btn .material-symbols-outlined{font-size:16px}
+                .header-info{flex:1}
+                .header-info h1{font-family:'Space Grotesk',sans-serif;font-size:1rem;font-weight:700;color:#e5e2e1}
+                .header-info p{font-size:.6875rem;color:#8a919e}
+                .header-badge{display:flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(97,218,193,.08);border:1px solid rgba(97,218,193,.15);border-radius:9999px}
+                .header-dot{width:8px;height:8px;border-radius:50%;background:#61dac1;animation:blink 2s infinite}
                 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-                .ws-badge span{font-size:.625rem;color:#61dac1;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+                .header-badge span{font-size:.625rem;color:#61dac1;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
 
-                /* WELCOME CARD */
-                .welcome-card{flex:1;background:#1B1B1C;border-radius:10px;border:1px solid rgba(64,71,82,.08);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 40px;gap:20px}
-                .wc-icon{width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,rgba(163,201,255,.15),rgba(0,120,212,.15));display:flex;align-items:center;justify-content:center}
-                .wc-icon .material-symbols-outlined{font-size:32px;color:#A3C9FF}
-                .wc-title{font-family:'Space Grotesk',sans-serif;font-size:1.5rem;font-weight:700;color:#e5e2e1}
-                .wc-desc{font-size:.875rem;color:#8a919e;max-width:440px;line-height:1.6}
-                .wc-desc strong{color:#C0C7D4}
-                .wc-status{display:flex;align-items:center;gap:8px;padding:8px 20px;background:rgba(0,120,212,.08);border:1px solid rgba(163,201,255,.12);border-radius:9999px}
-                .wc-status .material-symbols-outlined{font-size:18px;color:#A3C9FF;animation:spin 2s linear infinite}
-                @keyframes spin{to{transform:rotate(360deg)}}
-                .wc-status span{font-size:.75rem;color:#A3C9FF;font-weight:600}
+                /* GLOBAL PROGRESS */
+                .progress-section{display:flex;justify-content:space-between;align-items:flex-end;flex-shrink:0}
+                .progress-left p{font-size:.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#A3C9FF;margin-bottom:4px}
+                .progress-left h2{font-family:'Space Grotesk',sans-serif;font-size:1.5rem;font-weight:700;color:#e5e2e1}
+                .progress-right{text-align:right}
+                .progress-pct{font-family:'Fira Code',monospace;font-size:1.75rem;font-weight:700;color:#A3C9FF}
+                .progress-label{font-size:.625rem;color:#8a919e;text-transform:uppercase}
+                .global-bar{height:6px;background:#202020;border-radius:9999px;overflow:hidden;flex-shrink:0}
+                .global-fill{height:100%;background:linear-gradient(90deg,#A3C9FF,#0078D4);border-radius:9999px;transition:width 1s ease}
 
-                /* QUICK STATS */
-                .quick-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex-shrink:0}
-                .qs-card{background:#1B1B1C;border-radius:8px;padding:16px;text-align:center;border:1px solid rgba(64,71,82,.08)}
-                .qs-val{font-family:'Space Grotesk',sans-serif;font-size:1.25rem;font-weight:700;color:#e5e2e1}
-                .qs-val.green{color:#61dac1}
-                .qs-val.blue{color:#A3C9FF}
-                .qs-lbl{font-size:.5625rem;color:#8a919e;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+                /* PHASE GRID */
+                .phase-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:rgba(64,71,82,.2);border-radius:8px;overflow:visible;border:1px solid rgba(64,71,82,.2)}
+                .phase-card{background:#202020;padding:24px;display:flex;flex-direction:column;justify-content:space-between;min-height:240px;cursor:pointer;transition:background .15s ease}
+                .phase-card:hover{background:#252525}
+                .phase-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}
+                .phase-label{font-size:.625rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#8a919e;margin-bottom:4px}
+                .phase-name{font-size:.9375rem;font-weight:700;color:#e5e2e1}
+                .phase-icon{font-size:22px;color:#8a919e}
+                .phase-icon.pi-done{color:#61dac1}
+                .phase-icon.pi-active{color:#A3C9FF;animation:pulse 2s infinite}
+                @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-                /* ACTIONS */
-                .actions-row{display:flex;gap:10px;flex-shrink:0}
+                /* SUB-ITEMS */
+                .sub-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:24px}
+                .sub-item{aspect-ratio:1;background:#2a2a2a;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;border:1px solid transparent;border-radius:4px;transition:all .15s ease;cursor:help}
+                .sub-item:hover{border-color:rgba(163,201,255,.4)}
+                .sub-item .material-symbols-outlined{font-size:18px;color:#8a919e;margin-bottom:4px}
+                .sub-item.si-done .material-symbols-outlined{color:#61dac1}
+                .sub-item.si-active{border-color:rgba(163,201,255,.4)}
+                .sub-item.si-active .material-symbols-outlined{color:#A3C9FF}
+                .sub-item.si-pending{opacity:.4}
+                .sub-item span{font-size:.5rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#8a919e}
+                .sub-item.si-active span{color:#A3C9FF}
+
+                /* PHASE PROGRESS */
+                .phase-bottom{}
+                .phase-progress-row{display:flex;justify-content:space-between;font-size:.625rem;font-weight:700;text-transform:uppercase;margin-bottom:6px}
+                .phase-progress-row.ppr-done{color:#C0C7D4}
+                .phase-progress-row.ppr-active .ppr-status{color:#A3C9FF}
+                .phase-progress-row.ppr-pending{color:#8a919e}
+                .phase-bar{height:4px;background:#353535;border-radius:9999px;overflow:hidden}
+                .phase-fill{height:100%;border-radius:9999px}
+                .pf-done{background:#61dac1}
+                .pf-active{background:linear-gradient(90deg,#A3C9FF,#0078D4)}
+                .pf-pending{background:#353535}
+
+                /* SUMMARY ROW */
+                .summary-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;flex-shrink:0}
+                .summary-card{background:#202020;padding:18px;border-left:2px solid #0078D4;border-radius:0 6px 6px 0}
+                .summary-card .sc-label{font-size:.5625rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#8a919e;margin-bottom:6px}
+                .summary-card .sc-value{font-family:'Space Grotesk',sans-serif;font-size:1.25rem;font-weight:700;color:#e5e2e1}
+                .summary-card .sc-value.green{color:#61dac1}
+                .summary-card .sc-value.blue{color:#A3C9FF}
+                .summary-card .sc-sub{font-size:.5625rem;color:#8a919e;margin-top:2px}
+                .agent-avatars{display:flex;margin-top:4px}
+                .agent-avatar{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.5625rem;font-weight:700;border:2px solid #202020;margin-left:-6px}
+                .agent-avatar:first-child{margin-left:0}
+                .aa-v{background:#A3C9FF;color:#131313}
+                .aa-p{background:#0078D4;color:#fff}
+                .aa-s{background:#393939;color:#e5e2e1}
+
+                /* DOCUMENTS SECTION */
+                .docs-section{flex-shrink:0}
+                .docs-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+                .docs-header h2{font-family:'Space Grotesk',sans-serif;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#e5e2e1}
+                .docs-header .material-symbols-outlined{font-size:16px;color:#8a919e;cursor:pointer}
+                .docs-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+                .doc-card{background:#1B1B1C;border:1px solid rgba(64,71,82,.08);border-radius:8px;padding:14px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:all .15s ease}
+                .doc-card:hover{background:#202020;border-color:rgba(64,71,82,.2);transform:translateY(-1px)}
+                .doc-card .dc-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+                .doc-card .dc-icon .material-symbols-outlined{font-size:18px}
+                .dc-done{background:rgba(97,218,193,.12);color:#61dac1}
+                .dc-active{background:rgba(163,201,255,.12);color:#A3C9FF}
+                .dc-pending{background:rgba(53,53,53,.5);color:#8a919e}
+                .dc-info{flex:1;min-width:0}
+                .dc-name{font-size:.6875rem;font-weight:600;color:#e5e2e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .dc-desc{font-size:.5rem;color:#8a919e}
+                .dc-status{font-size:.5rem;font-weight:700;text-transform:uppercase;flex-shrink:0}
+                .ds-green{color:#61dac1}
+                .ds-blue{color:#A3C9FF}
+                .ds-gray{color:#8a919e}
+
+                /* ACTION BAR */
+                .action-bar{display:flex;gap:10px;flex-shrink:0;padding-top:4px}
                 .act-btn{display:flex;align-items:center;gap:8px;padding:10px 20px;border-radius:6px;font-size:.75rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif;border:none}
                 .act-btn:hover{transform:translateY(-1px)}
+                .act-btn:active{transform:scale(.97)}
                 .act-btn .material-symbols-outlined{font-size:16px}
-                .ab-primary{background:linear-gradient(180deg,#A3C9FF,#0078D4);color:#fff}
+                .ab-primary{background:linear-gradient(180deg,#A3C9FF,#0078D4);color:#fff;box-shadow:0 4px 12px rgba(0,120,212,.3)}
                 .ab-secondary{background:#202020;color:#C0C7D4;border:1px solid rgba(64,71,82,.15)}
                 .ab-secondary:hover{background:#353535;color:#e5e2e1}
                 .ab-danger{background:rgba(255,180,171,.08);color:#ffb4ab;border:1px solid rgba(255,180,171,.15)}
+                .ab-danger:hover{background:rgba(255,180,171,.15)}
+                .ab-new{background:rgba(163,201,255,.1);color:#A3C9FF;border:1px solid rgba(163,201,255,.2)}
+                .ab-new:hover{background:rgba(163,201,255,.15)}
             </style>
         </head>
         <body>
             <div class="page">
-                <!-- WELCOME STRIP -->
-                <div class="welcome-strip">
-                    <button class="ws-back" onclick="handleAction('back-to-workflows')">
-                        <span class="material-symbols-outlined">arrow_back</span>
-                        Back
+                <!-- HEADER -->
+                <div class="header">
+                    <button class="back-btn" onclick="handleAction('back-to-workflows')">
+                        <span class="material-symbols-outlined">arrow_back</span> Back
                     </button>
-                    <div class="ws-info">
+                    <div class="header-info">
                         <h1>${name}</h1>
                         <p>AI-powered SDLC pipeline workflow</p>
                     </div>
-                    <div class="ws-badge"><div class="ws-dot"></div><span>Running</span></div>
+                    <div class="header-badge"><div class="header-dot"></div><span>Running</span></div>
                 </div>
 
-                <!-- WELCOME CARD -->
-                <div class="welcome-card">
-                    <div class="wc-icon"><span class="material-symbols-outlined">account_tree</span></div>
-                    <div class="wc-title">Welcome to ${name}</div>
-                    <div class="wc-desc">
-                        Your AI pipeline is <strong>active</strong> and being orchestrated by Genesis.
-                        Phase 02 (Architectural Planning) is currently in progress at <strong>78%</strong> completion.
+                <!-- GLOBAL PROGRESS -->
+                <div class="progress-section">
+                    <div class="progress-left">
+                        <p>Genesis AI Orchestration</p>
+                        <h2>Active Pipeline: ${name}</h2>
                     </div>
-                    <div class="wc-status">
-                        <span class="material-symbols-outlined">sync</span>
-                        <span>Pipeline is running — Phase 02 orchestrating...</span>
+                    <div class="progress-right">
+                        <div class="progress-pct">45%</div>
+                        <div class="progress-label">Global Completion</div>
                     </div>
                 </div>
+                <div class="global-bar"><div class="global-fill" style="width:45%"></div></div>
 
-                <!-- QUICK STATS -->
-                <div class="quick-stats">
-                    <div class="qs-card"><div class="qs-val blue">2</div><div class="qs-lbl">Phases Done</div></div>
-                    <div class="qs-card"><div class="qs-val">4</div><div class="qs-lbl">Total Phases</div></div>
-                    <div class="qs-card"><div class="qs-val green">78%</div><div class="qs-lbl">Current Phase</div></div>
-                    <div class="qs-card"><div class="qs-val">~4m</div><div class="qs-lbl">ETA Remaining</div></div>
+                <!-- PHASE GRID -->
+                <div class="phase-grid">
+                    <!-- Phase 01: Strategic Foundation -->
+                    <div class="phase-card" onclick="handleAction('view-document','Vision Strategy')">
+                        <div>
+                            <div class="phase-top">
+                                <div><div class="phase-label">Phase 01</div><div class="phase-name">Strategic Foundation</div></div>
+                                <span class="material-symbols-outlined phase-icon pi-done" style="font-variation-settings:'FILL' 1">check_circle</span>
+                            </div>
+                            <div class="sub-grid">
+                                <div class="sub-item si-done"><span class="material-symbols-outlined">visibility</span><span>Vision</span></div>
+                                <div class="sub-item si-done"><span class="material-symbols-outlined">groups</span><span>Persona</span></div>
+                                <div class="sub-item si-done"><span class="material-symbols-outlined">query_stats</span><span>Market</span></div>
+                                <div class="sub-item si-done"><span class="material-symbols-outlined">psychology</span><span>Logic</span></div>
+                            </div>
+                        </div>
+                        <div class="phase-bottom">
+                            <div class="phase-progress-row ppr-done"><span>Status: Complete</span><span>100%</span></div>
+                            <div class="phase-bar"><div class="phase-fill pf-done" style="width:100%"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- Phase 02: Architectural Planning -->
+                    <div class="phase-card" onclick="handleAction('view-document','Technical Architecture')">
+                        <div>
+                            <div class="phase-top">
+                                <div><div class="phase-label">Phase 02</div><div class="phase-name">Architectural Planning</div></div>
+                                <span class="material-symbols-outlined phase-icon pi-active">sync</span>
+                            </div>
+                            <div class="sub-grid">
+                                <div class="sub-item si-active"><span class="material-symbols-outlined">schema</span><span>Schema</span></div>
+                                <div class="sub-item"><span class="material-symbols-outlined">route</span><span>Router</span></div>
+                                <div class="sub-item"><span class="material-symbols-outlined">database</span><span>Data</span></div>
+                                <div class="sub-item"><span class="material-symbols-outlined">api</span><span>API</span></div>
+                            </div>
+                        </div>
+                        <div class="phase-bottom">
+                            <div class="phase-progress-row ppr-active"><span class="ppr-status">Status: Orchestrating...</span><span>78%</span></div>
+                            <div class="phase-bar"><div class="phase-fill pf-active" style="width:78%"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- Phase 03: Technical Implementation -->
+                    <div class="phase-card">
+                        <div>
+                            <div class="phase-top">
+                                <div><div class="phase-label">Phase 03</div><div class="phase-name">Technical Implementation</div></div>
+                                <span class="material-symbols-outlined phase-icon">hourglass_empty</span>
+                            </div>
+                            <div class="sub-grid">
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">terminal</span><span>CLI</span></div>
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">javascript</span><span>React</span></div>
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">settings_ethernet</span><span>Socket</span></div>
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">lock</span><span>Auth</span></div>
+                            </div>
+                        </div>
+                        <div class="phase-bottom">
+                            <div class="phase-progress-row ppr-pending"><span>Status: Queued</span><span>0%</span></div>
+                            <div class="phase-bar"><div class="phase-fill pf-pending" style="width:0%"></div></div>
+                        </div>
+                    </div>
+
+                    <!-- Phase 04: Design & Delivery -->
+                    <div class="phase-card">
+                        <div>
+                            <div class="phase-top">
+                                <div><div class="phase-label">Phase 04</div><div class="phase-name">Design & Delivery</div></div>
+                                <span class="material-symbols-outlined phase-icon">pending_actions</span>
+                            </div>
+                            <div class="sub-grid">
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">palette</span><span>UI</span></div>
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">gesture</span><span>UX</span></div>
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">rocket_launch</span><span>Deploy</span></div>
+                                <div class="sub-item si-pending"><span class="material-symbols-outlined">inventory_2</span><span>Assets</span></div>
+                            </div>
+                        </div>
+                        <div class="phase-bottom">
+                            <div class="phase-progress-row ppr-pending"><span>Status: Pending</span><span>0%</span></div>
+                            <div class="phase-bar"><div class="phase-fill pf-pending" style="width:0%"></div></div>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- ACTIONS -->
-                <div class="actions-row">
-                    <button class="act-btn ab-primary"><span class="material-symbols-outlined">play_arrow</span>Run Pipeline</button>
-                    <button class="act-btn ab-secondary"><span class="material-symbols-outlined">pause</span>Pause</button>
-                    <button class="act-btn ab-secondary"><span class="material-symbols-outlined">ios_share</span>Export</button>
-                    <button class="act-btn ab-danger"><span class="material-symbols-outlined">stop</span>Stop</button>
+                <!-- SUMMARY ROW -->
+                <div class="summary-row">
+                    <div class="summary-card">
+                        <div class="sc-label">Active Agents</div>
+                        <div class="agent-avatars">
+                            <div class="agent-avatar aa-v">V</div>
+                            <div class="agent-avatar aa-p">P</div>
+                            <div class="agent-avatar aa-s">S</div>
+                        </div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="sc-label">Tokens Consumed</div>
+                        <div class="sc-value blue">124,502 <span style="font-size:.625rem;font-weight:400;opacity:.5">TX</span></div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="sc-label">Estimated Time</div>
+                        <div class="sc-value green">04:12 <span style="font-size:.625rem;font-weight:400;opacity:.5">REMAINING</span></div>
+                    </div>
+                </div>
+
+                <!-- GENERATED DOCUMENTS -->
+                <div class="docs-section">
+                    <div class="docs-header">
+                        <h2>Generated Documents <span style="color:#8a919e;font-weight:400;font-size:.625rem;letter-spacing:0;text-transform:none">(20 total)</span></h2>
+                        <span class="material-symbols-outlined" onclick="handleAction('export')">ios_share</span>
+                    </div>
+                    <div class="docs-grid">
+                        <div class="doc-card" onclick="handleAction('view-document','Vision & Strategy')">
+                            <div class="dc-icon dc-done"><span class="material-symbols-outlined">lightbulb</span></div>
+                            <div class="dc-info"><div class="dc-name">Vision & Strategy</div><div class="dc-desc">Strategic alignment & business goals</div></div>
+                            <span class="dc-status ds-green">Done</span>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','User Personas')">
+                            <div class="dc-icon dc-done"><span class="material-symbols-outlined">groups</span></div>
+                            <div class="dc-info"><div class="dc-name">User Personas</div><div class="dc-desc">Target audience definitions</div></div>
+                            <span class="dc-status ds-green">Done</span>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','Product Roadmap')">
+                            <div class="dc-icon dc-done"><span class="material-symbols-outlined">map</span></div>
+                            <div class="dc-info"><div class="dc-name">Product Roadmap</div><div class="dc-desc">Phase-wise delivery plan</div></div>
+                            <span class="dc-status ds-green">Done</span>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','GTM Strategy')">
+                            <div class="dc-icon dc-done"><span class="material-symbols-outlined">trending_up</span></div>
+                            <div class="dc-info"><div class="dc-name">GTM Strategy</div><div class="dc-desc">Go-to-market positioning</div></div>
+                            <span class="dc-status ds-green">Done</span>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','Strategic Use Cases')">
+                            <div class="dc-icon dc-active"><span class="material-symbols-outlined">account_tree</span></div>
+                            <div class="dc-info"><div class="dc-name">Strategic Use Cases</div><div class="dc-desc">Generating requirements...</div></div>
+                            <span class="dc-status ds-blue">Running</span>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','UI Flows & Navigation')">
+                            <div class="dc-icon dc-active"><span class="material-symbols-outlined">route</span></div>
+                            <div class="dc-info"><div class="dc-name">UI Flows & Navigation</div><div class="dc-desc">Generating navigation flows...</div></div>
+                            <span class="dc-status ds-blue">Running</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">dataset</span></div>
+                            <div class="dc-info"><div class="dc-name">Synthetic Data Schema</div><div class="dc-desc">Data models & relationships</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">description</span></div>
+                            <div class="dc-info"><div class="dc-name">Product Requirements Doc</div><div class="dc-desc">PRD with feature specifications</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">architecture</span></div>
+                            <div class="dc-info"><div class="dc-name">Technical Architecture</div><div class="dc-desc">System design & components</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">database</span></div>
+                            <div class="dc-info"><div class="dc-name">Database Design</div><div class="dc-desc">Entity relationship diagrams</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">api</span></div>
+                            <div class="dc-info"><div class="dc-name">API Specifications</div><div class="dc-desc">REST/GraphQL endpoint specs</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">security</span></div>
+                            <div class="dc-info"><div class="dc-name">Security Specification</div><div class="dc-desc">Auth, encryption & compliance</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">bug_report</span></div>
+                            <div class="dc-info"><div class="dc-name">Testing Strategy</div><div class="dc-desc">Test plans & coverage matrix</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">cloud</span></div>
+                            <div class="dc-info"><div class="dc-name">DevOps & Infrastructure</div><div class="dc-desc">CI/CD, containers & hosting</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">layers</span></div>
+                            <div class="dc-info"><div class="dc-name">Interactive Mockup</div><div class="dc-desc">Clickable UI prototype</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">palette</span></div>
+                            <div class="dc-info"><div class="dc-name">Brand Style Guide</div><div class="dc-desc">Colors, typography & assets</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">business_center</span></div>
+                            <div class="dc-info"><div class="dc-name">Business Requirements Doc</div><div class="dc-desc">Stakeholder requirements</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">fact_check</span></div>
+                            <div class="dc-info"><div class="dc-name">Functional Requirements</div><div class="dc-desc">Feature-level specifications</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">inventory_2</span></div>
+                            <div class="dc-info"><div class="dc-name">Bill of Materials</div><div class="dc-desc">Infrastructure cost estimation</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                        <div class="doc-card">
+                            <div class="dc-icon dc-pending"><span class="material-symbols-outlined">rocket_launch</span></div>
+                            <div class="dc-info"><div class="dc-name">Implementation Plan</div><div class="dc-desc">Sprint plan & milestones</div></div>
+                            <span class="dc-status ds-gray">Pending</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ACTION BAR -->
+                <div class="action-bar">
+                    <button class="act-btn ab-primary" onclick="handleAction('run-pipeline')"><span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1">play_arrow</span> Run Pipeline</button>
+                    <button class="act-btn ab-secondary" onclick="handleAction('pause-pipeline')"><span class="material-symbols-outlined">pause</span> Pause</button>
+                    <button class="act-btn ab-secondary" onclick="handleAction('export')"><span class="material-symbols-outlined">ios_share</span> Export</button>
+                    <button class="act-btn ab-secondary" onclick="handleAction('open-editor')"><span class="material-symbols-outlined">edit_note</span> Open Editor</button>
+                    <button class="act-btn ab-danger" onclick="handleAction('stop-pipeline')"><span class="material-symbols-outlined">stop</span> Stop</button>
+                    <button class="act-btn ab-new" onclick="handleAction('new-project')" style="margin-left:auto"><span class="material-symbols-outlined">add</span> New Workflow</button>
+                </div>
+            </div>
+            <script>
+                const vscode=acquireVsCodeApi();
+                function handleAction(c,d){vscode.postMessage(d?{command:c,doc:d}:{command:c})}
+            </script>
+        </body>
+        </html>`;
+    }
+}
+
+// ==================== NEW WORKFLOW MODAL ====================
+
+class NewWorkflowModal {
+    public static currentPanel: NewWorkflowModal | undefined;
+    private _panel: vscode.WebviewPanel;
+    private static _onCreate: ((name: string) => void) | undefined;
+
+    public static setOnCreate(cb: (name: string) => void) { NewWorkflowModal._onCreate = cb; }
+
+    private constructor(panel: vscode.WebviewPanel) {
+        this._panel = panel;
+        panel.webview.html = this._getHtml();
+        this._panel.onDidDispose(() => { NewWorkflowModal.currentPanel = undefined; });
+        this._panel.webview.onDidReceiveMessage(message => {
+            switch (message.command) {
+                case 'create':
+                    const name = message.name || 'Untitled Workflow';
+                    if (NewWorkflowModal._onCreate) NewWorkflowModal._onCreate(name);
+                    this._panel.dispose();
+                    vscode.window.showInformationMessage('Workflow "' + name + '" created!');
+                    break;
+                case 'cancel':
+                    this._panel.dispose();
+                    break;
+                case 'browse':
+                    vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true }).then(uris => {
+                        if (uris && uris.length > 0) this._panel.webview.postMessage({ command: 'update-path', value: uris[0].fsPath });
+                    });
+                    break;
+            }
+        });
+    }
+
+    public static open(extensionUri: vscode.Uri) {
+        if (NewWorkflowModal.currentPanel) { NewWorkflowModal.currentPanel._panel.reveal(); return; }
+        const panel = vscode.window.createWebviewPanel('genesis-new-workflow', 'Create New Workflow', vscode.ViewColumn.One, {
+            enableScripts: true, retainContextWhenHidden: false, localResourceRoots: [extensionUri]
+        });
+        NewWorkflowModal.currentPanel = new NewWorkflowModal(panel);
+    }
+
+    private _getHtml(): string {
+        return /*html*/ `
+        <!DOCTYPE html>
+        <html class="dark" lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Create New Workflow</title>
+            <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+                *{margin:0;padding:0;box-sizing:border-box}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;font-family:'Material Symbols Outlined'}
+                body{font-family:'Inter',sans-serif;background-color:#131313;color:#e5e2e1;margin:0;height:100vh;display:flex;align-items:center;justify-content:center}
+                .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px}
+                .modal{width:100%;max-width:680px;background:rgba(53,53,53,.85);backdrop-filter:blur(20px);border-radius:12px;border:1px solid rgba(64,71,82,.15);box-shadow:0 16px 48px rgba(0,0,0,.5);overflow:hidden;display:flex;flex-direction:column}
+                .modal-header{padding:32px 32px 24px;border-bottom:1px solid rgba(64,71,82,.1)}
+                .modal-header h2{font-family:'Space Grotesk',sans-serif;font-size:1.5rem;font-weight:700;color:#e5e2e1;letter-spacing:-.02em}
+                .modal-header p{font-size:.8125rem;color:#C0C7D4;margin-top:6px}
+                .modal-body{padding:28px 32px;display:flex;flex-direction:column;gap:24px;overflow-y:auto;max-height:60vh}
+                .field-group{display:flex;flex-direction:column;gap:8px}
+                .field-label{font-family:'Space Grotesk',sans-serif;font-size:.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#A3C9FF}
+                .field-input{width:100%;background:rgba(14,14,14,.8);border:1px solid rgba(64,71,82,.2);color:#e5e2e1;font-family:'Inter',sans-serif;font-size:.8125rem;padding:12px 16px;border-radius:6px;outline:none;transition:border-color .15s ease}
+                .field-input:focus{border-color:rgba(163,201,255,.5)}
+                .field-input::placeholder{color:#8a919e}
+                textarea.field-input{resize:vertical;min-height:90px;line-height:1.6}
+                .type-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+                .type-card{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 12px;background:rgba(14,14,14,.8);border:1px solid rgba(64,71,82,.2);border-radius:8px;cursor:pointer;transition:all .15s ease;text-align:center;gap:8px}
+                .type-card:hover{background:rgba(53,53,53,.6);border-color:rgba(64,71,82,.4)}
+                .type-card.selected{border-color:#A3C9FF;background:rgba(163,201,255,.06)}
+                .type-card .material-symbols-outlined{font-size:24px;color:#C0C7D4}
+                .type-card.selected .material-symbols-outlined{color:#A3C9FF}
+                .type-card-name{font-size:.75rem;font-weight:600;color:#e5e2e1}
+                .type-card-sub{font-size:.5625rem;color:#8a919e}
+                .select-row{display:flex;gap:12px;align-items:flex-end}
+                .select-row .field-group{flex:1}
+                .field-select{width:100%;background:rgba(14,14,14,.8);border:1px solid rgba(64,71,82,.2);color:#e5e2e1;font-family:'Inter',sans-serif;font-size:.8125rem;padding:12px 16px;border-radius:6px;outline:none;appearance:none;cursor:pointer}
+                .field-select:focus{border-color:rgba(163,201,255,.5)}
+                .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(14,14,14,.8);border:1px solid rgba(64,71,82,.2);border-radius:6px}
+                .toggle-label{font-size:.8125rem;color:#C0C7D4}
+                .toggle-switch{width:36px;height:20px;border-radius:9999px;background:#353535;position:relative;cursor:pointer;transition:background .15s ease;flex-shrink:0}
+                .toggle-switch.on{background:#0078D4}
+                .toggle-knob{width:16px;height:16px;border-radius:50%;background:#e5e2e1;position:absolute;top:2px;left:2px;transition:left .15s ease}
+                .toggle-switch.on .toggle-knob{left:18px}
+                .modal-footer{padding:20px 32px;border-top:1px solid rgba(64,71,82,.1);display:flex;justify-content:flex-end;gap:12px}
+                .btn{padding:10px 24px;font-family:'Inter',sans-serif;font-size:.8125rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:all .15s ease;display:flex;align-items:center;gap:8px}
+                .btn:active{transform:scale(.97)}
+                .btn-ghost{background:transparent;color:#C0C7D4;border:1px solid rgba(64,71,82,.2)}
+                .btn-ghost:hover{background:rgba(53,53,53,.5);color:#e5e2e1}
+                .btn-primary{background:linear-gradient(180deg,#A3C9FF,#0078D4);color:#fff;box-shadow:0 4px 12px rgba(0,120,212,.3)}
+                .btn-primary:hover{filter:brightness(1.1)}
+                .btn .material-symbols-outlined{font-size:18px}
+            </style>
+        </head>
+        <body>
+            <div class="overlay">
+                <div class="modal">
+                    <div class="modal-header">
+                        <h2>Create New Workflow</h2>
+                        <p>Set up a new AI-powered SDLC generation pipeline</p>
+                    </div>
+                    <div class="modal-body">
+                        <div class="field-group">
+                            <label class="field-label">Workflow Name</label>
+                            <input class="field-input" type="text" id="wf-name" placeholder="e.g. E-Commerce Re-platform" value="">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label">Description</label>
+                            <textarea class="field-input" id="wf-desc" placeholder="Describe the project scope, goals, and any specific requirements..."></textarea>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label">Project Type</label>
+                            <div class="type-grid">
+                                <div class="type-card selected" onclick="selectType(this)"><span class="material-symbols-outlined">shopping_cart</span><span class="type-card-name">E-Commerce</span><span class="type-card-sub">Retail & Marketplace</span></div>
+                                <div class="type-card" onclick="selectType(this)"><span class="material-symbols-outlined">account_balance</span><span class="type-card-name">FinTech</span><span class="type-card-sub">Finance & Banking</span></div>
+                                <div class="type-card" onclick="selectType(this)"><span class="material-symbols-outlined">local_hospital</span><span class="type-card-name">Healthcare</span><span class="type-card-sub">Medical & HIPAA</span></div>
+                                <div class="type-card" onclick="selectType(this)"><span class="material-symbols-outlined">school</span><span class="type-card-name">EdTech</span><span class="type-card-sub">Learning & LMS</span></div>
+                            </div>
+                        </div>
+                        <div class="select-row">
+                            <div class="field-group">
+                                <label class="field-label">AI Model</label>
+                                <select class="field-select" id="wf-model">
+                                    <option>Llama 3 (8B)</option>
+                                    <option>Mistral (7B)</option>
+                                    <option selected>Codellama (13B)</option>
+                                    <option>GPT-4o-mini</option>
+                                    <option>Claude 3.5 Haiku</option>
+                                </select>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label">Priority</label>
+                                <select class="field-select" id="wf-priority">
+                                    <option>Normal</option>
+                                    <option selected>High</option>
+                                    <option>Critical</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="toggle-row" onclick="toggleSwitch(this)">
+                            <span class="toggle-label">Enable auto-generation on creation</span>
+                            <div class="toggle-switch on"><div class="toggle-knob"></div></div>
+                        </div>
+                        <div class="toggle-row" onclick="toggleSwitch(this)">
+                            <span class="toggle-label">Use Genesis Agent for interactive mode</span>
+                            <div class="toggle-switch on"><div class="toggle-knob"></div></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-ghost" onclick="handleAction('cancel')">Cancel</button>
+                        <button class="btn btn-primary" onclick="handleCreate()"><span class="material-symbols-outlined">add_circle</span> Create Workflow</button>
+                    </div>
                 </div>
             </div>
             <script>
                 const vscode=acquireVsCodeApi();
                 function handleAction(c){vscode.postMessage({command:c})}
+                function handleCreate(){
+                    var name=document.getElementById('wf-name').value.trim()||'Untitled Workflow';
+                    vscode.postMessage({command:'create',name:name});
+                }
+                function selectType(el){document.querySelectorAll('.type-card').forEach(c=>c.classList.remove('selected'));el.classList.add('selected')}
+                function toggleSwitch(el){var t=el.querySelector('.toggle-switch');if(t)t.classList.toggle('on')}
+            </script>
+        </body>
+        </html>`;
+    }
+}
+
+// ==================== DOCUMENT PREVIEW PANEL ====================
+
+class DocumentPreviewPanel {
+    public static currentPanel: DocumentPreviewPanel | undefined;
+    private _panel: vscode.WebviewPanel;
+    private static _onBack: (() => void) | undefined;
+    private static _onExport: ((name: string) => void) | undefined;
+    private static _onViewDocument: ((wfName: string, docName: string) => void) | undefined;
+
+    public static setOnBack(cb: () => void) { DocumentPreviewPanel._onBack = cb; }
+    public static setOnExport(cb: (name: string) => void) { DocumentPreviewPanel._onExport = cb; }
+    public static setOnViewDocument(cb: (wfName: string, docName: string) => void) { DocumentPreviewPanel._onViewDocument = cb; }
+
+    private constructor(panel: vscode.WebviewPanel, wfName: string, docName: string) {
+        this._panel = panel;
+        panel.webview.html = this._getHtml(wfName, docName);
+        this._panel.onDidDispose(() => { DocumentPreviewPanel.currentPanel = undefined; });
+        this._panel.webview.onDidReceiveMessage(message => {
+            switch (message.command) {
+                case 'back': this._panel.dispose(); break;
+                case 'view-document': if (DocumentPreviewPanel._onViewDocument) DocumentPreviewPanel._onViewDocument(wfName, message.doc); break;
+                case 'export': if (DocumentPreviewPanel._onExport) DocumentPreviewPanel._onExport(wfName); break;
+                case 'open-editor': vscode.window.showInformationMessage('Opening in editor...'); break;
+                case 'regenerate': vscode.window.showInformationMessage('Regenerating document with latest AI model...'); break;
+            }
+        });
+    }
+
+    public static open(extensionUri: vscode.Uri, wfName: string, docName: string) {
+        if (DocumentPreviewPanel.currentPanel) { DocumentPreviewPanel.currentPanel._panel.dispose(); }
+        const panel = vscode.window.createWebviewPanel('genesis-doc-preview', docName, vscode.ViewColumn.One, {
+            enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [extensionUri]
+        });
+        DocumentPreviewPanel.currentPanel = new DocumentPreviewPanel(panel, wfName, docName);
+    }
+
+    private _getHtml(wfName: string, activeDoc: string): string {
+        const tabs = [
+            { name: 'Vision & Strategy', icon: 'lightbulb', status: 'done' },
+            { name: 'User Personas', icon: 'groups', status: 'done' },
+            { name: 'Product Roadmap', icon: 'map', status: 'done' },
+            { name: 'GTM Strategy', icon: 'trending_up', status: 'done' },
+            { name: 'Strategic Use Cases', icon: 'account_tree', status: 'active' },
+            { name: 'UI Flows & Navigation', icon: 'route', status: 'active' },
+            { name: 'Synthetic Data Schema', icon: 'dataset', status: 'pending' },
+            { name: 'Product Requirements Doc', icon: 'description', status: 'pending' },
+            { name: 'Technical Architecture', icon: 'architecture', status: 'pending' },
+            { name: 'Database Design', icon: 'database', status: 'pending' },
+            { name: 'API Specifications', icon: 'api', status: 'pending' },
+            { name: 'Security Specification', icon: 'security', status: 'pending' },
+            { name: 'Testing Strategy', icon: 'bug_report', status: 'pending' },
+            { name: 'DevOps & Infrastructure', icon: 'cloud', status: 'pending' },
+            { name: 'Interactive Mockup', icon: 'layers', status: 'pending' },
+            { name: 'Brand Style Guide', icon: 'palette', status: 'pending' },
+            { name: 'Business Requirements', icon: 'business_center', status: 'pending' },
+            { name: 'Functional Requirements', icon: 'fact_check', status: 'pending' },
+            { name: 'Bill of Materials', icon: 'inventory_2', status: 'pending' },
+            { name: 'Implementation Plan', icon: 'rocket_launch', status: 'pending' },
+        ];
+        const tabHtml = tabs.map(t =>
+            `<div class="doc-tab ${t.name === activeDoc ? 'active' : ''}" onclick="handleAction('view-document','${t.name}')">${t.name}${t.status === 'active' ? '<span class="tab-spinner"></span>' : t.status === 'done' ? ' ✓' : ''}</div>`
+        ).join('');
+
+        return /*html*/ `
+        <!DOCTYPE html>
+        <html class="dark" lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>${activeDoc}</title>
+            <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+                *{margin:0;padding:0;box-sizing:border-box}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;font-family:'Material Symbols Outlined'}
+                body{font-family:'Inter',sans-serif;background-color:#131313;color:#e5e2e1;margin:0;height:100vh;display:flex;flex-direction:column}
+                ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#353535;border-radius:10px}::-webkit-scrollbar-thumb:hover{background:#404751}
+
+                /* HEADER BAR */
+                .topbar{display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:44px;background:#131313;border-bottom:1px solid rgba(64,71,82,.1);flex-shrink:0}
+                .topbar-left{display:flex;align-items:center;gap:16px}
+                .back-btn{display:flex;align-items:center;gap:6px;padding:6px 12px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .back-btn:hover{background:#353535;color:#e5e2e1}
+                .back-btn .material-symbols-outlined{font-size:16px}
+                .topbar-title{font-family:'Space Grotesk',sans-serif;font-size:.8125rem;font-weight:700;color:#A3C9FF}
+                .topbar-right{display:flex;align-items:center;gap:6px}
+                .tb-btn{display:flex;align-items:center;gap:6px;padding:6px 14px;background:#2a2a2a;border:none;border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .tb-btn:hover{background:#353535;color:#e5e2e1}
+                .tb-btn .material-symbols-outlined{font-size:14px}
+                .tb-btn.tb-accent{background:rgba(163,201,255,.1);color:#A3C9FF;border:1px solid rgba(163,201,255,.2)}
+                .tb-btn.tb-accent:hover{background:rgba(163,201,255,.15)}
+
+                /* TABS */
+                .tabs-bar{display:flex;align-items:center;background:#1B1B1C;height:40px;padding:0 16px;gap:0;border-bottom:1px solid rgba(64,71,82,.1);flex-shrink:0;overflow-x:auto}
+                .doc-tab{padding:10px 16px;font-size:.6875rem;font-weight:500;color:#C0C7D4;cursor:pointer;transition:all .15s ease;border-bottom:2px solid transparent;white-space:nowrap;display:flex;align-items:center;gap:8px}
+                .doc-tab:hover{color:#e5e2e1;background:rgba(53,53,53,.3)}
+                .doc-tab.active{color:#A3C9FF;border-bottom-color:#A3C9FF;background:#202020}
+                .tab-spinner{width:8px;height:8px;border-radius:50%;background:#A3C9FF;animation:blink 2s infinite}
+                @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+                /* CONTEXT TOOLBAR */
+                .ctx-toolbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:#131313;border-bottom:1px solid rgba(64,71,82,.05);flex-shrink:0}
+                .ctx-breadcrumb{display:flex;align-items:center;gap:6px;font-size:.6875rem;color:#8a919e}
+                .ctx-breadcrumb span{color:#C0C7D4}
+                .ctx-actions{display:flex;gap:6px}
+
+                /* DOCUMENT CONTENT */
+                .doc-content{flex:1;overflow-y:auto;background:#131313;padding:40px 0;display:flex;justify-content:center}
+                .doc-paper{max-width:720px;width:100%;background:#1E1E1E;padding:48px;box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:2px;border:1px solid rgba(64,71,82,.05);margin:0 20px 40px}
+                .doc-paper h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:2rem;margin-bottom:1.5rem;color:#e5e2e1;letter-spacing:-.02em;line-height:1.2}
+                .doc-paper h2{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:1.375rem;margin-top:2rem;margin-bottom:1rem;color:#A3C9FF;border-bottom:1px solid rgba(64,71,82,.15);padding-bottom:.5rem}
+                .doc-paper h3{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:1rem;margin-top:1.5rem;margin-bottom:.75rem;color:#e5e2e1}
+                .doc-paper p{line-height:1.7;color:#C0C7D4;margin-bottom:1rem;font-size:.875rem}
+                .doc-paper ul{list-style:none;padding-left:0;margin-bottom:1.5rem}
+                .doc-paper li{position:relative;padding-left:1.5rem;margin-bottom:.5rem;color:#C0C7D4;font-size:.875rem;line-height:1.6}
+                .doc-paper li::before{content:'';position:absolute;left:0;top:.625rem;width:.5rem;height:1px;background:#A3C9FF}
+                .code-block{font-family:'Fira Code',monospace;background:#0E0E0E;border-radius:4px;padding:16px;margin:1.5rem 0;font-size:.8125rem;border:1px solid rgba(64,71,82,.15);color:#A3C9FF;overflow-x:auto;position:relative}
+                .code-block .code-lang{position:absolute;top:8px;right:12px;font-size:.5rem;color:#8a919e;text-transform:uppercase;letter-spacing:.1em}
+                .flow-diagram{margin:2rem 0;padding:24px;background:#0E0E0E;border-radius:8px;border:1px solid rgba(64,71,82,.1)}
+                .flow-node{padding:12px 24px;border:1px solid #0078D4;border-radius:4px;text-align:center;font-family:'Fira Code',monospace;font-size:.75rem;color:#A3C9FF;margin:0 auto;width:fit-content}
+                .flow-node.primary-node{background:rgba(163,201,255,.08);border-color:#A3C9FF}
+                .flow-arrow{text-align:center;color:#0078D4;padding:8px 0}
+                .flow-grid{display:flex;gap:16px;justify-content:center;padding:8px 0}
+                .flow-grid .flow-node{width:120px;padding:10px 8px;font-size:.625rem;background:#2a2a2a;border-color:rgba(64,71,82,.3);color:#C0C7D4}
+
+                /* FOOTER */
+                .doc-footer{display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:28px;background:#0E0E0E;border-top:1px solid rgba(64,71,82,.1);font-family:'Fira Code',monospace;font-size:.5625rem;color:#8a919e;text-transform:uppercase;letter-spacing:.08em;flex-shrink:0}
+                .footer-left{display:flex;align-items:center;gap:16px}
+                .footer-right{display:flex;align-items:center;gap:12px}
+            </style>
+        </head>
+        <body>
+            <!-- TOP BAR -->
+            <div class="topbar">
+                <div class="topbar-left">
+                    <button class="back-btn" onclick="handleAction('back')"><span class="material-symbols-outlined">arrow_back</span> Back</button>
+                    <span class="topbar-title">${activeDoc}</span>
+                </div>
+                <div class="topbar-right">
+                    <div style="display:flex;align-items:center;gap:2px;margin-right:8px">
+                        <div style="width:6px;height:6px;border-radius:50%;background:#61dac1;box-shadow:0 0 6px rgba(97,218,193,.5)"></div>
+                        <span style="font-size:.5625rem;color:#61dac1;font-weight:700;text-transform:uppercase">Live</span>
+                    </div>
+                    <button class="tb-btn" onclick="handleAction('open-editor')"><span class="material-symbols-outlined">edit</span> Open in Editor</button>
+                    <button class="tb-btn" onclick="handleAction('export')"><span class="material-symbols-outlined">download</span> Export</button>
+                    <button class="tb-btn tb-accent" onclick="handleAction('regenerate')"><span class="material-symbols-outlined">refresh</span> Regenerate</button>
+                </div>
+            </div>
+
+            <!-- TABS -->
+            <div class="tabs-bar">${tabHtml}</div>
+
+            <!-- CONTEXT TOOLBAR -->
+            <div class="ctx-toolbar">
+                <div class="ctx-breadcrumb">
+                    <span class="material-symbols-outlined" style="font-size:14px">folder_open</span>
+                    <span>Projects</span> / <span>${wfName}</span> / <span style="color:#A3C9FF">${activeDoc}</span>
+                </div>
+            </div>
+
+            <!-- DOCUMENT CONTENT -->
+            <div class="doc-content">
+                <div class="doc-paper">
+                    <h1>Vision & Strategy - ${wfName}</h1>
+                    <h2>1. Executive Summary</h2>
+                    <p>This document outlines the migration of the legacy monolith architecture to a distributed ecosystem. The strategic goal is to reduce technical debt while increasing market responsiveness by 40% over the next two fiscal quarters.</p>
+                    <h3>1.1 Goals</h3>
+                    <ul>
+                        <li>High availability (99.99% uptime) with zero-downtime deployments</li>
+                        <li>API-first architecture for omnichannel expansion</li>
+                        <li>Automated CI/CD pipelines with Genesis AI integration</li>
+                        <li>Event-driven communication using message brokers</li>
+                    </ul>
+                    <h2>2. System Architecture</h2>
+                    <p>The transition utilizes a strangler fig pattern to slowly decouple modules without interrupting existing revenue streams. The architecture follows Domain-Driven Design principles.</p>
+                    <div class="flow-diagram">
+                        <div class="flow-node primary-node">Client (Web/App)</div>
+                        <div class="flow-arrow"><span class="material-symbols-outlined">arrow_downward</span></div>
+                        <div class="flow-node" style="border-color:#0078D4;background:rgba(0,120,212,.08)">API Gateway</div>
+                        <div class="flow-grid">
+                            <div class="flow-node">Auth Service</div>
+                            <div class="flow-node">Cart Service</div>
+                            <div class="flow-node">Search Service</div>
+                        </div>
+                    </div>
+                    <h2>3. Technical Configuration</h2>
+                    <p>The infrastructure configuration is defined declaratively using Terraform modules for reproducible deployments across environments.</p>
+                    <div class="code-block">
+                        <span class="code-lang">json</span>
+<pre>{
+  "project": "${wfName}",
+  "arch": "microservices",
+  "deployment": {
+    "provider": "Genesis Cloud",
+    "region": "us-east-1",
+    "scaling": "auto"
+  },
+  "services": ["auth", "cart", "catalog", "order"],
+  "security": "OAuth2-OIDC"
+}</pre>
+                    </div>
+                    <h2>4. Success Metrics</h2>
+                    <ul>
+                        <li>Reduce deployment time from 4 hours to 15 minutes</li>
+                        <li>Achieve 99.99% uptime SLA across all critical services</li>
+                        <li>Improve developer productivity by 35% through AI-assisted SDLC</li>
+                        <li>Maintain PCI-DSS compliance throughout migration</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- FOOTER -->
+            <div class="doc-footer">
+                <div class="footer-left">
+                    <span>v1.0.4 - Connected to Genesis Cloud</span>
+                </div>
+                <div class="footer-right">
+                    <span>1,240 Words</span>
+                    <span>|</span>
+                    <span>4 Sections</span>
+                    <span>|</span>
+                    <span><span class="material-symbols-outlined" style="font-size:10px;vertical-align:middle">schedule</span> Generated: 2 mins ago</span>
+                </div>
+            </div>
+            <script>
+                const vscode=acquireVsCodeApi();
+                function handleAction(c,d){vscode.postMessage(d?{command:c,doc:d}:{command:c})}
+            </script>
+        </body>
+        </html>`;
+    }
+}
+
+// ==================== WORKFLOW EDITOR PANEL ====================
+
+class WorkflowEditorPanel {
+    public static currentPanel: WorkflowEditorPanel | undefined;
+    private _panel: vscode.WebviewPanel;
+    private static _onViewDocument: ((wfName: string, docName: string) => void) | undefined;
+    private static _onExport: ((name: string) => void) | undefined;
+
+    public static setOnViewDocument(cb: (wfName: string, docName: string) => void) { WorkflowEditorPanel._onViewDocument = cb; }
+    public static setOnExport(cb: (name: string) => void) { WorkflowEditorPanel._onExport = cb; }
+
+    private constructor(panel: vscode.WebviewPanel, name: string) {
+        this._panel = panel;
+        panel.webview.html = this._getHtml(name);
+        this._panel.onDidDispose(() => { WorkflowEditorPanel.currentPanel = undefined; });
+        this._panel.webview.onDidReceiveMessage(message => {
+            switch (message.command) {
+                case 'back': this._panel.dispose(); break;
+                case 'view-document': if (WorkflowEditorPanel._onViewDocument) WorkflowEditorPanel._onViewDocument(name, message.doc); break;
+                case 'export': if (WorkflowEditorPanel._onExport) WorkflowEditorPanel._onExport(name); break;
+                case 'run': vscode.window.showInformationMessage('Pipeline started for ' + name); break;
+                case 'save': vscode.window.showInformationMessage('Workflow saved!'); break;
+            }
+        });
+    }
+
+    public static open(extensionUri: vscode.Uri, name: string) {
+        if (WorkflowEditorPanel.currentPanel) { WorkflowEditorPanel.currentPanel._panel.reveal(); return; }
+        const panel = vscode.window.createWebviewPanel('genesis-workflow-editor', 'Editor: ' + name, vscode.ViewColumn.One, {
+            enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [extensionUri]
+        });
+        WorkflowEditorPanel.currentPanel = new WorkflowEditorPanel(panel, name);
+    }
+
+    private _getHtml(name: string): string {
+        return /*html*/ `
+        <!DOCTYPE html>
+        <html class="dark" lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Editor - ${name}</title>
+            <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+                *{margin:0;padding:0;box-sizing:border-box}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;font-family:'Material Symbols Outlined'}
+                body{font-family:'Inter',sans-serif;background-color:#131313;color:#e5e2e1;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+                ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#353535;border-radius:10px}::-webkit-scrollbar-thumb:hover{background:#404751}
+
+                /* BREADCRUMB HEADER */
+                .breadcrumb-bar{height:56px;border-bottom:1px solid rgba(64,71,82,.1);display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:#1B1B1C;flex-shrink:0}
+                .bc-left{display:flex;align-items:center;gap:16px}
+                .bc-back{display:flex;align-items:center;gap:6px;padding:6px 12px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .bc-back:hover{background:#353535;color:#e5e2e1}
+                .bc-back .material-symbols-outlined{font-size:16px}
+                .bc-path{display:flex;align-items:center;gap:6px;font-size:.6875rem;font-weight:600;color:#C0C7D4;text-transform:uppercase;letter-spacing:.08em}
+                .bc-path span{color:#8a919e}
+                .bc-path .bc-active{color:#A3C9FF}
+                .bc-editable{display:flex;align-items:center;gap:6px}
+                .bc-editable input{background:transparent;border:none;outline:none;color:#e5e2e1;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:.8125rem;width:280px}
+                .bc-editable .material-symbols-outlined{font-size:14px;color:#8a919e}
+                .bc-right{display:flex;align-items:center;gap:8px}
+                .btn-run{display:flex;align-items:center;gap:6px;padding:8px 18px;background:linear-gradient(180deg,#A3C9FF,#0078D4);border:none;border-radius:6px;color:#fff;font-size:.6875rem;font-weight:700;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif;box-shadow:0 4px 12px rgba(0,120,212,.3)}
+                .btn-run:hover{filter:brightness(1.1)}
+                .btn-run:active{transform:scale(.97)}
+                .btn-run .material-symbols-outlined{font-size:14px}
+                .btn-sec{display:flex;align-items:center;gap:6px;padding:8px 16px;background:#2a2a2a;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:700;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .btn-sec:hover{background:#353535;color:#e5e2e1}
+                .btn-sec .material-symbols-outlined{font-size:14px}
+
+                /* SPLIT LAYOUT */
+                .split{flex:1;display:flex;overflow:hidden}
+
+                /* LEFT PANEL */
+                .left-panel{width:50%;display:flex;flex-direction:column;border-right:1px solid rgba(64,71,82,.1);background:#131313}
+                .panel-tabs{display:flex;border-bottom:1px solid rgba(64,71,82,.1)}
+                .panel-tab{padding:12px 24px;font-size:.6875rem;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;color:#C0C7D4;transition:all .15s ease;display:flex;align-items:center;gap:8px}
+                .panel-tab.active{color:#A3C9FF;border-bottom-color:#A3C9FF;background:#131313}
+                .panel-tab:hover{color:#e5e2e1}
+                .panel-tab .material-symbols-outlined{font-size:14px}
+                .input-area{flex:1;padding:20px;display:flex;flex-direction:column;gap:12px}
+                .input-area textarea{flex:1;background:#0E0E0E;border:1px solid rgba(64,71,82,.1);border-radius:8px;padding:20px;font-family:'Fira Code',monospace;font-size:.8125rem;line-height:1.7;color:#C0C7D4;resize:none;outline:none;transition:border-color .15s ease}
+                .input-area textarea:focus{border-color:rgba(163,201,255,.3)}
+                .input-actions{display:flex;align-items:center;justify-content:space-between}
+                .input-actions-left{display:flex;gap:8px}
+                .ia-btn{display:flex;align-items:center;gap:6px;padding:8px 14px;background:#2a2a2a;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease;font-family:'Inter',sans-serif}
+                .ia-btn:hover{background:#353535;color:#e5e2e1}
+                .ia-btn .material-symbols-outlined{font-size:14px}
+
+                /* RIGHT PANEL */
+                .right-panel{width:50%;display:flex;flex-direction:column;background:#0E0E0E}
+                .right-header{padding:14px 24px;border-bottom:1px solid rgba(64,71,82,.1);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+                .right-header h3{font-size:.625rem;font-weight:700;text-transform:uppercase;letter-spacing:.2em;color:#8a919e}
+                .right-header h3 span{color:#A3C9FF}
+                .doc-dots{display:flex;gap:4px}
+                .doc-dot{width:6px;height:6px;border-radius:50%}
+                .dd-done{background:#61dac1}
+                .dd-active{background:#A3C9FF;animation:blink 2s infinite}
+                @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+                .dd-pending{background:rgba(64,71,82,.3)}
+                .right-content{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:10px}
+
+                /* DOCUMENT CARDS */
+                .doc-card{display:flex;align-items:center;justify-content:space-between;padding:16px;background:#202020;border:1px solid rgba(64,71,82,.1);border-radius:10px;cursor:pointer;transition:all .15s ease}
+                .doc-card:hover{border-color:rgba(97,218,193,.3);background:#252525}
+                .doc-card.active{border-color:rgba(163,201,255,.4);background:rgba(163,201,255,.04);box-shadow:0 4px 16px rgba(163,201,255,.08)}
+                .doc-card.pending{opacity:.6;border-style:dashed}
+                .dc-left{display:flex;align-items:center;gap:14px}
+                .dc-icon{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+                .dc-icon .material-symbols-outlined{font-size:18px}
+                .di-done{background:rgba(97,218,193,.12);color:#61dac1}
+                .di-active{background:rgba(163,201,255,.12);color:#A3C9FF}
+                .di-pending{background:#353535;color:#8a919e}
+                .dc-info h4{font-size:.8125rem;font-weight:600;color:#e5e2e1}
+                .dc-info p{font-size:.6875rem;color:#8a919e;margin-top:2px}
+                .doc-card.active .dc-info p{color:rgba(163,201,255,.8)}
+                .dc-right{display:flex;align-items:center;gap:10px}
+                .dc-status{font-family:'Fira Code',monospace;font-size:.5625rem;text-transform:uppercase;font-weight:700}
+                .dc-status.green{color:#61dac1}
+                .dc-status.blue{color:#A3C9FF;animation:blink 2s infinite}
+                .dc-status.gray{color:#8a919e}
+                .dc-check{color:#61dac1;font-size:18px}
+                .dc-spinner{width:18px;height:18px;border:2px solid #A3C9FF;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite}
+                @keyframes spin{to{transform:rotate(360deg)}}
+                .dc-pending-icon{color:#8a919e;font-size:18px}
+            </style>
+        </head>
+        <body>
+            <!-- BREADCRUMB BAR -->
+            <div class="breadcrumb-bar">
+                <div class="bc-left">
+                    <button class="bc-back" onclick="handleAction('back')"><span class="material-symbols-outlined">arrow_back</span> Back</button>
+                    <div class="bc-path"><span>Projects</span> / <span class="bc-active">${name}</span></div>
+                    <div style="width:1px;height:16px;background:rgba(64,71,82,.2)"></div>
+                    <div class="bc-editable">
+                        <input type="text" value="Workflow: ${name}">
+                        <span class="material-symbols-outlined">edit</span>
+                    </div>
+                </div>
+                <div class="bc-right">
+                    <button class="btn-run" onclick="handleAction('run')"><span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1">play_arrow</span> Run</button>
+                    <button class="btn-sec" onclick="handleAction('save')"><span class="material-symbols-outlined">save</span> Save</button>
+                    <button class="btn-sec" onclick="handleAction('export')"><span class="material-symbols-outlined">ios_share</span> Export</button>
+                </div>
+            </div>
+
+            <!-- SPLIT LAYOUT -->
+            <div class="split">
+                <!-- LEFT: INPUT -->
+                <div class="left-panel">
+                    <div class="panel-tabs">
+                        <div class="panel-tab active"><span class="material-symbols-outlined">subject</span> Text Input</div>
+                        <div class="panel-tab"><span class="material-symbols-outlined">upload_file</span> Upload Document</div>
+                    </div>
+                    <div class="input-area">
+                        <textarea placeholder="Describe your workflow logic here...">Rewrite legacy PHP monolith to microservices.
+Ensure event-driven architecture using Kafka.
+Target GCP Cloud Run for deployment.
+Apply Domain Driven Design (DDD) principles.
+
+Required Outputs:
+1. System Context Diagram
+2. Data Flow Analysis
+3. Infrastructure as Code (Terraform) templates
+4. API Gateway Configuration
+5. Service Mesh Networking</textarea>
+                        <div class="input-actions">
+                            <div class="input-actions-left">
+                                <button class="ia-btn"><span class="material-symbols-outlined">attach_file</span> Attach File</button>
+                                <button class="ia-btn"><span class="material-symbols-outlined">delete_sweep</span> Clear</button>
+                            </div>
+                            <button class="ia-btn"><span class="material-symbols-outlined">auto_awesome_motion</span> Templates</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RIGHT: DOCUMENTS -->
+                <div class="right-panel">
+                    <div class="right-header">
+                        <h3>Documents <span>(4/20)</span></h3>
+                        <div class="doc-dots"><div class="doc-dot dd-done"></div><div class="doc-dot dd-done"></div><div class="doc-dot dd-done"></div><div class="doc-dot dd-done"></div><div class="doc-dot dd-active"></div><div class="doc-dot dd-active"></div><div class="doc-dot dd-pending"></div></div>
+                    </div>
+                    <div class="right-content">
+                        <div class="doc-card" onclick="handleAction('view-document','Vision & Strategy')">
+                            <div class="dc-left">
+                                <div class="dc-icon di-done"><span class="material-symbols-outlined">lightbulb</span></div>
+                                <div class="dc-info"><h4>Vision & Strategy</h4><p>Strategic alignment & business goals</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status green">Done</span><span class="material-symbols-outlined dc-check" style="font-variation-settings:'FILL' 1">check_circle</span></div>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','User Personas')">
+                            <div class="dc-left">
+                                <div class="dc-icon di-done"><span class="material-symbols-outlined">groups</span></div>
+                                <div class="dc-info"><h4>User Personas</h4><p>Target audience definitions</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status green">Done</span><span class="material-symbols-outlined dc-check" style="font-variation-settings:'FILL' 1">check_circle</span></div>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','Product Roadmap')">
+                            <div class="dc-left">
+                                <div class="dc-icon di-done"><span class="material-symbols-outlined">map</span></div>
+                                <div class="dc-info"><h4>Product Roadmap</h4><p>Phase-wise delivery plan</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status green">Done</span><span class="material-symbols-outlined dc-check" style="font-variation-settings:'FILL' 1">check_circle</span></div>
+                        </div>
+                        <div class="doc-card" onclick="handleAction('view-document','GTM Strategy')">
+                            <div class="dc-left">
+                                <div class="dc-icon di-done"><span class="material-symbols-outlined">trending_up</span></div>
+                                <div class="dc-info"><h4>GTM Strategy</h4><p>Go-to-market positioning</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status green">Done</span><span class="material-symbols-outlined dc-check" style="font-variation-settings:'FILL' 1">check_circle</span></div>
+                        </div>
+                        <div class="doc-card active" onclick="handleAction('view-document','Strategic Use Cases')">
+                            <div class="dc-left">
+                                <div class="dc-icon di-active"><span class="material-symbols-outlined">account_tree</span></div>
+                                <div class="dc-info"><h4>Strategic Use Cases</h4><p>Generating functional requirements...</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status blue">Running</span><div class="dc-spinner"></div></div>
+                        </div>
+                        <div class="doc-card active" onclick="handleAction('view-document','UI Flows & Navigation')">
+                            <div class="dc-left">
+                                <div class="dc-icon di-active"><span class="material-symbols-outlined">route</span></div>
+                                <div class="dc-info"><h4>UI Flows & Navigation</h4><p>Generating navigation flows...</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status blue">Running</span><div class="dc-spinner"></div></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">dataset</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Synthetic Data Schema</h4><p>Data models & relationships</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">description</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Product Requirements Doc</h4><p>PRD with feature specifications</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">architecture</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Technical Architecture</h4><p>System design & components</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">database</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Database Design</h4><p>Entity relationship diagrams</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">api</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">API Specifications</h4><p>REST/GraphQL endpoint specs</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">security</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Security Specification</h4><p>Auth, encryption & compliance</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">bug_report</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Testing Strategy</h4><p>Test plans & coverage matrix</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">cloud</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">DevOps & Infrastructure</h4><p>CI/CD, containers & hosting</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">layers</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Interactive Mockup</h4><p>Clickable UI prototype</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">palette</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Brand Style Guide</h4><p>Colors, typography & assets</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">business_center</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Business Requirements Doc</h4><p>Stakeholder requirements</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">fact_check</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Functional Requirements</h4><p>Feature-level specifications</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">inventory_2</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Bill of Materials</h4><p>Infrastructure cost estimation</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                        <div class="doc-card pending">
+                            <div class="dc-left">
+                                <div class="dc-icon di-pending"><span class="material-symbols-outlined">rocket_launch</span></div>
+                                <div class="dc-info"><h4 style="color:#C0C7D4">Implementation Plan</h4><p>Sprint plan & milestones</p></div>
+                            </div>
+                            <div class="dc-right"><span class="dc-status gray">Pending</span><span class="material-symbols-outlined dc-pending-icon">radio_button_unchecked</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <script>
+                const vscode=acquireVsCodeApi();
+                function handleAction(c,d){vscode.postMessage(d?{command:c,doc:d}:{command:c})}
+                document.querySelectorAll('.panel-tab').forEach(tab=>{
+                    tab.addEventListener('click',()=>{
+                        document.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'));
+                        tab.classList.add('active');
+                    });
+                });
+            </script>
+        </body>
+        </html>`;
+    }
+}
+
+// ==================== EXPORT DIALOG MODAL ====================
+
+class ExportDialogModal {
+    public static currentPanel: ExportDialogModal | undefined;
+    private _panel: vscode.WebviewPanel;
+    private static _onBack: (() => void) | undefined;
+
+    public static setOnBack(cb: () => void) { ExportDialogModal._onBack = cb; }
+
+    private constructor(panel: vscode.WebviewPanel, wfName: string) {
+        this._panel = panel;
+        panel.webview.html = this._getHtml(wfName);
+        this._panel.onDidDispose(() => { ExportDialogModal.currentPanel = undefined; });
+        this._panel.webview.onDidReceiveMessage(message => {
+            switch (message.command) {
+                case 'cancel': this._panel.dispose(); break;
+                case 'export': vscode.window.showInformationMessage('Exporting documents for ' + wfName + '...'); break;
+                case 'browse':
+                    vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true }).then(uris => {
+                        if (uris && uris.length > 0) this._panel.webview.postMessage({ command: 'update-path', value: uris[0].fsPath });
+                    });
+                    break;
+            }
+        });
+    }
+
+    public static open(extensionUri: vscode.Uri, name: string) {
+        if (ExportDialogModal.currentPanel) { ExportDialogModal.currentPanel._panel.reveal(); return; }
+        const panel = vscode.window.createWebviewPanel('genesis-export', 'Export Documents', vscode.ViewColumn.One, {
+            enableScripts: true, retainContextWhenHidden: false, localResourceRoots: [extensionUri]
+        });
+        ExportDialogModal.currentPanel = new ExportDialogModal(panel, name);
+    }
+
+    private _getHtml(wfName: string): string {
+        return /*html*/ `
+        <!DOCTYPE html>
+        <html class="dark" lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Export Documents</title>
+            <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+                *{margin:0;padding:0;box-sizing:border-box}
+                .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;font-family:'Material Symbols Outlined'}
+                body{font-family:'Inter',sans-serif;background-color:#131313;color:#e5e2e1;margin:0;height:100vh;display:flex;align-items:center;justify-content:center}
+                .overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;padding:24px}
+                .modal{width:100%;max-width:640px;background:rgba(53,53,53,.8);backdrop-filter:blur(20px);border-radius:12px;border:1px solid rgba(64,71,82,.15);box-shadow:0 16px 48px rgba(0,0,0,.5);overflow:hidden;display:flex;flex-direction:column}
+
+                /* HEADER */
+                .modal-header{padding:32px 32px 24px;border-bottom:1px solid rgba(64,71,82,.1)}
+                .modal-header-top{display:flex;justify-content:space-between;align-items:flex-start}
+                .modal-header h2{font-family:'Space Grotesk',sans-serif;font-size:1.5rem;font-weight:700;color:#e5e2e1;letter-spacing:-.02em}
+                .modal-header p{font-size:.8125rem;color:#C0C7D4;margin-top:6px}
+                .close-btn{color:#8a919e;cursor:pointer;transition:color .15s ease;background:none;border:none;padding:4px}
+                .close-btn:hover{color:#e5e2e1}
+                .close-btn .material-symbols-outlined{font-size:20px}
+
+                /* BODY */
+                .modal-body{padding:28px 32px;display:flex;flex-direction:column;gap:28px;overflow-y:auto;max-height:55vh}
+                .section-label{font-family:'Space Grotesk',sans-serif;font-size:.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#A3C9FF;margin-bottom:12px}
+
+                /* FORMAT GRID */
+                .format-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+                .format-card{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 12px;background:rgba(14,14,14,.8);border:1px solid rgba(64,71,82,.15);border-radius:6px;cursor:pointer;transition:all .15s ease;gap:8px}
+                .format-card:hover{background:rgba(53,53,53,.4)}
+                .format-card.selected{border-color:#A3C9FF;background:rgba(163,201,255,.05)}
+                .format-card .material-symbols-outlined{font-size:22px;color:#C0C7D4}
+                .format-card.selected .material-symbols-outlined{color:#A3C9FF}
+                .format-card span{font-size:.6875rem;font-weight:500;color:#e5e2e1}
+
+                /* OUTPUT PATH */
+                .path-row{display:flex;gap:8px}
+                .path-input{flex:1;background:rgba(14,14,14,.8);padding:10px 16px;border-radius:6px;border:1px solid rgba(64,71,82,.15);display:flex;align-items:center;overflow:hidden}
+                .path-input span{font-family:'Fira Code',monospace;font-size:.8125rem;color:#C0C7D4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .browse-btn{padding:10px 16px;background:#2a2a2a;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#e5e2e1;font-size:.8125rem;font-weight:500;cursor:pointer;transition:all .15s ease;display:flex;align-items:center;gap:8px;font-family:'Inter',sans-serif;flex-shrink:0}
+                .browse-btn:hover{background:#353535}
+                .browse-btn .material-symbols-outlined{font-size:16px}
+
+                /* SELECTION LIST */
+                .selection-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+                .selection-header label{display:flex;align-items:center;gap:8px;cursor:pointer}
+                .selection-header label span{font-size:.6875rem;font-weight:500;color:#C0C7D4}
+                .custom-cb{width:16px;height:16px;border-radius:3px;background:rgba(14,14,14,.8);border:1px solid rgba(64,71,82,.3);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+                .custom-cb.checked{background:#0078D4;border-color:#0078D4}
+                .custom-cb.checked::after{content:'✓';font-size:11px;color:#fff}
+                .doc-list{background:rgba(14,14,14,.8);border-radius:6px;border:1px solid rgba(64,71,82,.15);overflow:hidden}
+                .doc-row{display:flex;align-items:center;gap:14px;padding:12px 16px;transition:background .15s ease;cursor:pointer}
+                .doc-row:hover{background:rgba(53,53,53,.3)}
+                .doc-row+.doc-row{border-top:1px solid rgba(64,71,82,.08)}
+                .doc-row .material-symbols-outlined{font-size:18px;color:#C0C7D4}
+
+                /* FOOTER */
+                .modal-footer{padding:24px 32px;border-top:1px solid rgba(64,71,82,.1);display:flex;flex-direction:column;gap:16px}
+                .progress-section{}
+                .progress-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+                .progress-row span{font-size:.5625rem;font-family:'Fira Code',monospace;text-transform:uppercase;letter-spacing:.1em;color:#8a919e}
+                .progress-bar{height:4px;background:#353535;border-radius:9999px;overflow:hidden}
+                .progress-fill{height:100%;background:#0078D4;border-radius:9999px;transition:width .5s ease}
+                .footer-actions{display:flex;justify-content:flex-end;gap:12px}
+                .btn{padding:10px 24px;font-family:'Inter',sans-serif;font-size:.8125rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:all .15s ease;display:flex;align-items:center;gap:8px}
+                .btn:active{transform:scale(.97)}
+                .btn-ghost{background:transparent;color:#C0C7D4}
+                .btn-ghost:hover{color:#e5e2e1;background:rgba(53,53,53,.3)}
+                .btn-primary{background:linear-gradient(180deg,#A3C9FF,#0078D4);color:#fff;box-shadow:0 4px 12px rgba(0,120,212,.3)}
+                .btn-primary:hover{filter:brightness(1.1)}
+                .btn .material-symbols-outlined{font-size:16px}
+            </style>
+        </head>
+        <body>
+            <div class="overlay">
+                <div class="modal">
+                    <div class="modal-header">
+                        <div class="modal-header-top">
+                            <div>
+                                <h2>Export Documents</h2>
+                                <p>Select format and source files for the architectural package.</p>
+                            </div>
+                            <button class="close-btn" onclick="handleAction('cancel')"><span class="material-symbols-outlined">close</span></button>
+                        </div>
+                    </div>
+                    <div class="modal-body">
+                        <!-- FORMAT -->
+                        <div>
+                            <div class="section-label">Export Format</div>
+                            <div class="format-grid">
+                                <div class="format-card selected" onclick="selectFormat(this)">
+                                    <span class="material-symbols-outlined">picture_as_pdf</span><span>PDF</span>
+                                </div>
+                                <div class="format-card" onclick="selectFormat(this)">
+                                    <span class="material-symbols-outlined">markdown</span><span>Markdown</span>
+                                </div>
+                                <div class="format-card" onclick="selectFormat(this)">
+                                    <span class="material-symbols-outlined">html</span><span>HTML</span>
+                                </div>
+                                <div class="format-card" onclick="selectFormat(this)">
+                                    <span class="material-symbols-outlined">library_add_check</span><span>All</span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- OUTPUT PATH -->
+                        <div>
+                            <div class="section-label">Output Path</div>
+                            <div class="path-row">
+                                <div class="path-input"><span>/Users/user/Desktop/Genesis_Exports/${wfName}</span></div>
+                                <button class="browse-btn" onclick="handleAction('browse')"><span class="material-symbols-outlined">folder_open</span> Browse</button>
+                            </div>
+                        </div>
+                        <!-- SELECTION LIST -->
+                        <div>
+                            <div class="selection-header">
+                                <div class="section-label" style="margin-bottom:0">Selection List</div>
+                                <label>
+                                    <div class="custom-cb checked" onclick="this.classList.toggle('checked')"></div>
+                                    <span>All Documents</span>
+                                </label>
+                            </div>
+                            <div class="doc-list">
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb checked"></div>
+                                    <span class="material-symbols-outlined">lightbulb</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Vision & Strategy</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb checked"></div>
+                                    <span class="material-symbols-outlined">groups</span>
+                                    <span style="font-size:.8125rem;font-weight:500">User Personas</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb checked"></div>
+                                    <span class="material-symbols-outlined">map</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Product Roadmap</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb checked"></div>
+                                    <span class="material-symbols-outlined">trending_up</span>
+                                    <span style="font-size:.8125rem;font-weight:500">GTM Strategy</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb checked"></div>
+                                    <span class="material-symbols-outlined">account_tree</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Strategic Use Cases</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">route</span>
+                                    <span style="font-size:.8125rem;font-weight:500">UI Flows & Navigation</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">dataset</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Synthetic Data Schema</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">description</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Product Requirements Document</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">architecture</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Technical Architecture</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">database</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Database Design</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">api</span>
+                                    <span style="font-size:.8125rem;font-weight:500">API Specifications</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">security</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Security Specification</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">bug_report</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Testing Strategy</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">cloud</span>
+                                    <span style="font-size:.8125rem;font-weight:500">DevOps & Infrastructure</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">layers</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Interactive Mockup</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">palette</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Brand Style Guide</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">business_center</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Business Requirements Document</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">fact_check</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Functional Requirements</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">inventory_2</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Bill of Materials</span>
+                                </div>
+                                <div class="doc-row" onclick="toggleCheck(this)">
+                                    <div class="custom-cb"></div>
+                                    <span class="material-symbols-outlined">rocket_launch</span>
+                                    <span style="font-size:.8125rem;font-weight:500">Implementation Plan</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <div class="progress-section">
+                            <div class="progress-row"><span>Export Status</span><span>Waiting...</span></div>
+                            <div class="progress-bar"><div class="progress-fill" id="export-progress" style="width:0%"></div></div>
+                        </div>
+                        <div class="footer-actions">
+                            <button class="btn btn-ghost" onclick="handleAction('cancel')">Cancel</button>
+                            <button class="btn btn-primary" onclick="startExport()"><span class="material-symbols-outlined">ios_share</span> Export</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <script>
+                const vscode=acquireVsCodeApi();
+                function handleAction(c){vscode.postMessage({command:c})}
+                function selectFormat(el){document.querySelectorAll('.format-card').forEach(c=>c.classList.remove('selected'));el.classList.add('selected')}
+                function toggleCheck(row){var cb=row.querySelector('.custom-cb');if(cb)cb.classList.toggle('checked')}
+                function startExport(){
+                    var bar=document.getElementById('export-progress');
+                    if(bar){bar.style.width='0%';var p=0;var iv=setInterval(function(){p+=Math.random()*15;if(p>=100){p=100;clearInterval(iv)}bar.style.width=p+'%'},200)}
+                    vscode.postMessage({command:'export'});
+                }
+                window.addEventListener('message',function(e){if(e.data.command==='update-path'){var el=document.querySelector('.path-input span');if(el)el.textContent=e.data.value}});
             </script>
         </body>
         </html>`;
