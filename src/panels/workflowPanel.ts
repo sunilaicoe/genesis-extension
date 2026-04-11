@@ -1,45 +1,149 @@
 import * as vscode from 'vscode';
+import { WorkflowService } from '../services/workflowService';
+import { InputType } from '../api/genesisApi';
 
 export class WorkflowPanel {
     public static currentPanel: WorkflowPanel | undefined;
     private _panel: vscode.WebviewPanel;
-    private static _openDetail: ((name: string) => void) | undefined;
+    private static _openDetail: ((workflowId: string, name: string) => void) | undefined;
     private static _newWorkflow: (() => void) | undefined;
+    private _service: WorkflowService;
 
-    public static setOpenDetail(cb: (name: string) => void) { WorkflowPanel._openDetail = cb; }
+    public static setOpenDetail(cb: (workflowId: string, name: string) => void) { WorkflowPanel._openDetail = cb; }
     public static setNewWorkflow(cb: () => void) { WorkflowPanel._newWorkflow = cb; }
 
-    private constructor(panel: vscode.WebviewPanel) {
+    constructor(panel: vscode.WebviewPanel, service: WorkflowService) {
         this._panel = panel;
+        this._service = service;
         panel.webview.html = this._getHtml();
-        panel.iconPath = vscode.Uri.joinPath(vscode.Uri.file('/tmp'), 'media', 'icon.svg');
         this._panel.onDidDispose(() => { WorkflowPanel.currentPanel = undefined; });
         this._panel.webview.onDidReceiveMessage(message => {
             switch (message.command) {
-                case 'open-workflow': if (WorkflowPanel._openDetail) WorkflowPanel._openDetail(message.name); break;
-                case 'new-workflow': if (WorkflowPanel._newWorkflow) WorkflowPanel._newWorkflow(); break;
-                case 'delete-workflow': vscode.window.showWarningMessage('Delete workflow: ' + message.name + '?'); break;
+                case 'open-workflow':
+                    if (WorkflowPanel._openDetail) WorkflowPanel._openDetail(message.id, message.name);
+                    break;
+                case 'new-workflow':
+                    if (WorkflowPanel._newWorkflow) WorkflowPanel._newWorkflow();
+                    break;
+                case 'delete-workflow':
+                    vscode.window.showWarningMessage(`Delete "${message.name}" permanently?`, { modal: true }, 'Delete').then(s => {
+                        if (s === 'Delete') this._service.deleteWorkflow(message.id);
+                    });
+                    break;
+                case 'start-pipeline':
+                    this._service.startPipeline(message.id);
+                    break;
+                case 'refresh':
+                    this._service.fetchWorkflows();
+                    break;
             }
         });
+        const eventSub = service.onEvent(({ type }) => {
+            if (type === 'workflows-updated' || type === 'pipeline-status-updated') {
+                this._update();
+            }
+        });
+        this._panel.onDidDispose(() => { eventSub.dispose(); });
     }
 
-    public static open(extensionUri: vscode.Uri) {
-        if (WorkflowPanel.currentPanel) { WorkflowPanel.currentPanel._panel.reveal(); return; }
+    public static open(extensionUri: vscode.Uri, service: WorkflowService) {
+        if (WorkflowPanel.currentPanel) {
+            WorkflowPanel.currentPanel._panel.reveal();
+            service.fetchWorkflows();
+            return;
+        }
         const panel = vscode.window.createWebviewPanel('genesis-workflow', 'My Workflows', vscode.ViewColumn.One, {
             enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [extensionUri]
         });
-        WorkflowPanel.currentPanel = new WorkflowPanel(panel);
+        WorkflowPanel.currentPanel = new WorkflowPanel(panel, service);
     }
 
     private _update() { this._panel.webview.html = this._getHtml(); }
 
+    private _timeAgo(ts: number): string {
+        const d = Date.now() - ts;
+        const m = Math.floor(d / 60000);
+        if (m < 1) return 'Just now';
+        if (m < 60) return `${m}m ago`;
+        const h = Math.floor(m / 60);
+        if (h < 24) return `${h}h ago`;
+        if (h < 48) return 'Yesterday';
+        return `${Math.floor(h / 24)}d ago`;
+    }
+
+    private _formatDuration(ms: number | null): string {
+        if (!ms) return '';
+        const secs = Math.floor(ms / 1000);
+        const mins = Math.floor(secs / 60);
+        return mins < 1 ? `${secs}s` : `${mins}m ${secs % 60}s`;
+    }
+
+    private _getInputIcon(type: InputType): { icon: string; color: string } {
+        switch (type) {
+            case 'voice': return { icon: 'mic', color: '#61dac1' };
+            case 'document': return { icon: 'description', color: '#A3C9FF' };
+            case 'text': return { icon: 'title', color: '#a855f7' };
+            case 'mixed': return { icon: 'layers', color: '#fbbf24' };
+            default: return { icon: 'mic', color: '#8a919e' };
+        }
+    }
+
+    private _getInputLabel(type: InputType): string {
+        return { voice: 'Voice', document: 'Document', text: 'Text', mixed: 'Mixed' }[type] || 'Voice';
+    }
+
     private _getHtml(): string {
+        const workflows = this._service.getWorkflows();
+        const total = workflows.length;
+
+        const wfCardsHtml = workflows.map(wf => {
+            const safeName = wf.workflowName.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const isRunning = wf.status === 'running';
+            const isFailed = wf.status === 'failed';
+            const isPending = wf.status === 'pending';
+            const isCompleted = wf.status === 'completed';
+
+            const badgeCls = isRunning ? 'b-run' : isCompleted ? 'b-done' : isFailed ? 'b-err' : 'b-pend';
+            const badgeText = isRunning ? '● Running' : isCompleted ? '✓ Completed' : isFailed ? '✕ Failed' : '◎ Pending';
+            const inputIcon = this._getInputIcon(wf.inputType || 'voice');
+            const inputLabel = this._getInputLabel(wf.inputType || 'voice');
+
+            return `
+            <div class="wf-card" data-status="${wf.status}" data-search="${(wf.workflowName + ' ' + (wf.productName || '') + ' ' + (wf.description || '')).toLowerCase()}" data-input="${wf.inputType || 'voice'}">
+                ${isRunning ? '<div class="wf-progress-strip"><div class="wf-progress-strip-fill"></div></div>' : ''}
+                <div class="wf-card-inner" onclick="handleAction('open-workflow','${wf._id}','${safeName}')">
+                    <div class="wf-card-top">
+                        <div class="wf-input-icon" style="background:${inputIcon.color}15;color:${inputIcon.color}"><span class="material-symbols-outlined">${inputIcon.icon}</span></div>
+                        <div class="wf-card-info">
+                            <div class="wf-card-name-row">
+                                <h3 class="wf-card-name">${wf.productName || wf.workflowName}</h3>
+                                <span class="wf-badge ${badgeCls}">${isRunning ? '<span class="wf-badge-spinner"></span>' : ''}${badgeText}</span>
+                            </div>
+                            ${wf.description ? `<p class="wf-card-desc">${wf.description}</p>` : ''}
+                            <div class="wf-card-meta">
+                                <span class="wf-meta-time">${this._timeAgo(wf.createdAt)}</span>
+                                <span class="wf-meta-tag">${inputLabel}</span>
+                                <span class="wf-meta-artifacts">📄 ${wf.artifactCount || 0}/20</span>
+                                ${wf.duration ? `<span class="wf-meta-duration">⏱ ${this._formatDuration(wf.duration)}</span>` : ''}
+                                ${isRunning && wf.currentAgentName ? `<span class="wf-meta-agent"><span class="wf-agent-spinner"></span>${wf.currentAgentName}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="wf-card-actions">
+                        <button class="wf-act-open" title="Open" onclick="event.stopPropagation();handleAction('open-workflow','${wf._id}','${safeName}')"><span class="material-symbols-outlined">open_in_new</span> Open</button>
+                        ${isFailed ? `<button class="wf-act-retry" title="Retry" onclick="event.stopPropagation();handleAction('start-pipeline','${wf._id}')"><span class="material-symbols-outlined">refresh</span> Retry</button>` : ''}
+                        ${isPending ? `<button class="wf-act-start" title="Start" onclick="event.stopPropagation();handleAction('start-pipeline','${wf._id}')"><span class="material-symbols-outlined">play_arrow</span> Start</button>` : ''}
+                        <button class="wf-act-delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','${wf._id}','${safeName}')"><span class="material-symbols-outlined">delete</span></button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+
         return /*html*/ `
         <!DOCTYPE html>
         <html class="dark" lang="en">
         <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>My Workflows</title>
             <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
             <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
@@ -50,79 +154,87 @@ export class WorkflowPanel {
                 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#353535;border-radius:10px}::-webkit-scrollbar-thumb:hover{background:#404751}
                 .page{flex:1;display:flex;flex-direction:column;gap:12px;padding:16px 20px;overflow-y:auto}
 
-                /* WELCOME STRIP */
-                .welcome-strip{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#1B1B1C;border-radius:8px;border:1px solid rgba(64,71,82,.08);flex-shrink:0}
-                .ws-left{display:flex;align-items:center;gap:14px}
-                .ws-icon{width:38px;height:38px;border-radius:8px;background:linear-gradient(135deg,rgba(163,201,255,.15),rgba(0,120,212,.15));display:flex;align-items:center;justify-content:center;flex-shrink:0}
-                .ws-icon .material-symbols-outlined{font-size:20px;color:#A3C9FF}
-                .ws-text h1{font-family:'Space Grotesk',sans-serif;font-size:1rem;font-weight:700;color:#e5e2e1;line-height:1.2}
-                .ws-text p{font-size:.6875rem;color:#8a919e}
-                .ws-right{display:flex;align-items:center;gap:10px}
+                /* PAGE HEADER */
+                .page-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#1B1B1C;border-radius:8px;border:1px solid rgba(64,71,82,.08);flex-shrink:0}
+                .ph-left{display:flex;align-items:center;gap:14px}
+                .ph-icon{width:38px;height:38px;border-radius:8px;background:linear-gradient(135deg,rgba(163,201,255,.15),rgba(0,120,212,.15));display:flex;align-items:center;justify-content:center;flex-shrink:0}
+                .ph-icon .material-symbols-outlined{font-size:20px;color:#A3C9FF}
+                .ph-text h1{font-family:'Space Grotesk',sans-serif;font-size:1rem;font-weight:700;color:#e5e2e1;line-height:1.2}
+                .ph-text p{font-size:.6875rem;color:#8a919e}
+                .ph-right{display:flex;align-items:center;gap:10px}
                 .btn-new{display:flex;align-items:center;gap:6px;padding:8px 18px;background:linear-gradient(180deg,#A3C9FF 0%,#0078D4 100%);border:none;border-radius:6px;color:#fff;font-size:.6875rem;font-weight:700;cursor:pointer;transition:all .15s ease;text-transform:uppercase;letter-spacing:.04em}
                 .btn-new:hover{opacity:.9;transform:translateY(-1px)}
                 .btn-new .material-symbols-outlined{font-size:16px}
-                .btn-filter{display:flex;align-items:center;gap:6px;padding:8px 14px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .15s ease}
-                .btn-filter:hover{background:#353535;color:#e5e2e1}
-                .btn-filter .material-symbols-outlined{font-size:14px}
 
-                /* STATS ROW */
-                .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex-shrink:0}
-                .stat-card{background:#1B1B1C;border-radius:8px;padding:16px 18px;border:1px solid rgba(64,71,82,.08);display:flex;align-items:center;gap:14px;transition:background .15s ease;cursor:default}
-                .stat-card:hover{background:#202020}
-                .stat-icon{width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-                .stat-icon .material-symbols-outlined{font-size:18px}
-                .si-blue{background:rgba(0,120,212,.15);color:#A3C9FF}
-                .si-green{background:rgba(97,218,193,.12);color:#61dac1}
-                .si-amber{background:rgba(251,191,36,.12);color:#fbbf24}
-                .si-purple{background:rgba(168,85,247,.12);color:#a855f7}
-                .stat-val{font-family:'Space Grotesk',sans-serif;font-size:1.5rem;font-weight:700;color:#e5e2e1;line-height:1}
-                .stat-lbl{font-size:.625rem;color:#8a919e;text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+                /* FILTER BAR */
+                .filter-bar{display:flex;align-items:center;gap:10px;flex-shrink:0}
+                .search-box{position:relative;flex:1;max-width:320px}
+                .search-box .material-symbols-outlined{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:16px;color:#8a919e;pointer-events:none}
+                .search-box input{width:100%;padding:8px 12px 8px 34px;background:#1B1B1C;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#e5e2e1;font-size:.75rem;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s ease}
+                .search-box input:focus{border-color:rgba(163,201,255,.4)}
+                .search-box input::placeholder{color:#8a919e}
+                .filter-select{position:relative}
+                .filter-select select{appearance:none;padding:8px 30px 8px 12px;background:#1B1B1C;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-family:'Inter',sans-serif;outline:none;cursor:pointer;transition:border-color .15s ease}
+                .filter-select select:focus{border-color:rgba(163,201,255,.4)}
+                .filter-select::after{content:'expand_more';font-family:'Material Symbols Outlined';position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:14px;color:#8a919e;pointer-events:none}
+                .filter-count{font-size:.6875rem;color:#8a919e;font-weight:500;white-space:nowrap}
 
-                /* FILTER TABS */
-                .filter-tabs{display:flex;align-items:center;gap:2px;background:#1B1B1C;border-radius:8px;padding:4px;flex-shrink:0;border:1px solid rgba(64,71,82,.08)}
-                .ftab{padding:7px 16px;border-radius:6px;font-size:.6875rem;font-weight:600;color:#8a919e;cursor:pointer;transition:all .15s ease;border:none;background:transparent}
-                .ftab:hover{color:#e5e2e1}
-                .ftab.active{background:#202020;color:#e5e2e1}
-                .ftab .count{margin-left:6px;padding:1px 7px;background:rgba(53,53,53,.6);border-radius:9999px;font-size:.5625rem;font-weight:700}
-                .ftab.active .count{background:rgba(163,201,255,.12);color:#A3C9FF}
-
-                /* WORKFLOW LIST */
-                .wf-list{display:flex;flex-direction:column;gap:1px;background:rgba(64,71,82,.12);border-radius:8px;overflow:hidden;border:1px solid rgba(64,71,82,.12)}
-                .wf-row{display:flex;align-items:center;gap:16px;padding:16px 20px;background:#1B1B1C;cursor:pointer;transition:background .15s ease}
-                .wf-row:hover{background:#202020}
-                .wf-icon{width:40px;height:40px;border-radius:8px;background:#202020;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(64,71,82,.15)}
-                .wf-icon .material-symbols-outlined{font-size:20px;color:#A3C9FF}
-                .wf-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
-                .wf-name{font-size:.8125rem;font-weight:600;color:#e5e2e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-                .wf-desc{font-size:.625rem;color:#8a919e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-                .wf-meta{display:flex;align-items:center;gap:16px;flex-shrink:0}
-                .wf-phases{display:flex;align-items:center;gap:6px}
-                .wf-phase-dot{width:8px;height:8px;border-radius:50%}
-                .wpd-done{background:#61dac1;box-shadow:0 0 4px rgba(97,218,193,.4)}
-                .wpd-active{background:#A3C9FF;box-shadow:0 0 4px rgba(163,201,255,.4);animation:blink 2s infinite}
-                @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-                .wpd-pending{background:#353535}
-                .wf-phase-label{font-size:.5625rem;color:#8a919e;white-space:nowrap}
-                .wf-progress{width:80px;height:4px;background:#353535;border-radius:9999px;overflow:hidden}
-                .wf-progress-fill{height:100%;border-radius:9999px}
-                .wpf-blue{background:linear-gradient(90deg,#A3C9FF,#0078D4)}
-                .wpf-green{background:linear-gradient(90deg,#80f7dc,#008672)}
-                .wpf-gray{background:#404752}
-                .wf-pct{font-family:'Fira Code',monospace;font-size:.6875rem;font-weight:600;color:#C0C7D4;width:36px;text-align:right}
-                .wf-badge{font-size:.5rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:3px 10px;border-radius:9999px}
+                /* WORKFLOW CARDS */
+                .wf-cards{display:flex;flex-direction:column;gap:3px}
+                .wf-card{background:#1B1B1C;border:1px solid rgba(64,71,82,.08);border-radius:10px;overflow:hidden;transition:all .15s ease}
+                .wf-card:hover{border-color:rgba(64,71,82,.2)}
+                .wf-progress-strip{height:3px;background:#202020;overflow:hidden}
+                .wf-progress-strip-fill{height:100%;width:30%;background:linear-gradient(90deg,#A3C9FF,#0078D4);animation:progressSlide 1.5s ease-in-out infinite}
+                @keyframes progressSlide{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+                .wf-card-inner{padding:16px 20px}
+                .wf-card-top{display:flex;align-items:flex-start;gap:14px}
+                .wf-input-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(64,71,82,.1)}
+                .wf-input-icon .material-symbols-outlined{font-size:16px}
+                .wf-card-info{flex:1;min-width:0}
+                .wf-card-name-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+                .wf-card-name{font-size:.8125rem;font-weight:600;color:#e5e2e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .wf-badge{display:inline-flex;align-items:center;gap:4px;font-size:.5rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 10px;border-radius:9999px;flex-shrink:0}
+                .wf-badge-spinner{width:6px;height:6px;border-radius:50%;background:#61dac1;display:inline-block;animation:badgeSpin 2s infinite}
+                @keyframes badgeSpin{0%,100%{opacity:1}50%{opacity:.3}}
                 .b-run{background:rgba(97,218,193,.12);color:#61dac1}
                 .b-done{background:rgba(163,201,255,.1);color:#A3C9FF}
                 .b-pend{background:rgba(192,199,212,.08);color:#8a919e}
                 .b-err{background:rgba(255,180,171,.1);color:#ffb4ab}
-                .wf-time{font-size:.625rem;color:#8a919e;white-space:nowrap}
-                .wf-actions{display:flex;align-items:center;gap:4px;opacity:0;transition:opacity .15s ease}
-                .wf-row:hover .wf-actions{opacity:1}
-                .wf-act-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:#8a919e;cursor:pointer;transition:all .12s ease;border:none;background:transparent}
-                .wf-act-btn:hover{background:rgba(53,53,53,.5);color:#e5e2e1}
-                .wf-act-btn .material-symbols-outlined{font-size:16px}
-                .wf-act-btn.delete:hover{background:rgba(255,180,171,.1);color:#ffb4ab}
+                .wf-card-desc{font-size:.6875rem;color:#8a919e;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                .wf-card-meta{display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap}
+                .wf-meta-time{font-size:.6875rem;color:#8a919e}
+                .wf-meta-tag{font-size:.5625rem;color:#C0C7D4;background:#202020;padding:1px 8px;border-radius:9999px}
+                .wf-meta-artifacts{font-size:.6875rem;color:#8a919e}
+                .wf-meta-duration{font-size:.6875rem;color:#8a919e}
+                .wf-meta-agent{font-size:.6875rem;color:#A3C9FF;display:flex;align-items:center;gap:4px}
+                .wf-agent-spinner{width:10px;height:10px;border:2px solid rgba(163,201,255,.3);border-top-color:#A3C9FF;border-radius:50%;animation:spin .8s linear infinite}
+                @keyframes spin{to{transform:rotate(360deg)}}
+                .wf-card-actions{display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:1px solid rgba(64,71,82,.08)}
+                .wf-act-left{display:flex;align-items:center;gap:8px}
+                .wf-act-open{display:flex;align-items:center;gap:5px;padding:6px 14px;background:#202020;border:1px solid rgba(64,71,82,.15);border-radius:6px;color:#C0C7D4;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .12s ease}
+                .wf-act-open:hover{background:#353535;color:#e5e2e1}
+                .wf-act-open .material-symbols-outlined{font-size:14px}
+                .wf-act-retry{display:flex;align-items:center;gap:5px;padding:6px 14px;background:rgba(255,180,171,.08);border:1px solid rgba(255,180,171,.15);border-radius:6px;color:#ffb4ab;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .12s ease}
+                .wf-act-retry:hover{background:rgba(255,180,171,.15)}
+                .wf-act-retry .material-symbols-outlined{font-size:14px}
+                .wf-act-start{display:flex;align-items:center;gap:5px;padding:6px 14px;background:rgba(163,201,255,.1);border:1px solid rgba(163,201,255,.2);border-radius:6px;color:#A3C9FF;font-size:.6875rem;font-weight:600;cursor:pointer;transition:all .12s ease}
+                .wf-act-start:hover{background:rgba(163,201,255,.15)}
+                .wf-act-start .material-symbols-outlined{font-size:14px}
+                .wf-act-delete{padding:6px;border-radius:6px;color:#8a919e;cursor:pointer;transition:all .12s ease;background:none;border:none}
+                .wf-act-delete:hover{background:rgba(255,180,171,.1);color:#ffb4ab}
+                .wf-act-delete .material-symbols-outlined{font-size:16px}
 
-                /* QUICK ACTIONS ROW */
+                /* EMPTY */
+                .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px;text-align:center}
+                .empty-icon{width:56px;height:56px;border-radius:12px;background:#202020;border:1px solid rgba(64,71,82,.15);display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+                .empty-icon .material-symbols-outlined{font-size:28px;color:#8a919e}
+                .empty h3{font-size:.875rem;font-weight:600;color:#e5e2e1;margin-bottom:4px}
+                .empty p{font-size:.75rem;color:#8a919e}
+                .empty-filter{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px;text-align:center}
+                .empty-filter h3{font-size:.875rem;font-weight:600;color:#e5e2e1;margin-bottom:4px}
+                .empty-filter p{font-size:.75rem;color:#8a919e}
+
+                /* QUICK ACTIONS */
                 .qa-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;flex-shrink:0}
                 .qa{background:#1B1B1C;border-radius:8px;padding:18px 16px;border:1px solid rgba(64,71,82,.08);cursor:pointer;transition:all .15s ease;display:flex;align-items:center;gap:14px}
                 .qa:hover{background:#202020;border-color:rgba(64,71,82,.2);transform:translateY(-1px)}
@@ -138,227 +250,88 @@ export class WorkflowPanel {
         </head>
         <body>
             <div class="page">
-                <!-- WELCOME STRIP -->
-                <div class="welcome-strip">
-                    <div class="ws-left">
-                        <div class="ws-icon"><span class="material-symbols-outlined">account_tree</span></div>
-                        <div class="ws-text">
+                <!-- PAGE HEADER -->
+                <div class="page-header">
+                    <div class="ph-left">
+                        <div class="ph-icon"><span class="material-symbols-outlined">account_tree</span></div>
+                        <div class="ph-text">
                             <h1>My Workflows</h1>
-                            <p>Manage and monitor all your AI-powered SDLC pipelines</p>
+                            <p>All your product discovery sessions</p>
                         </div>
                     </div>
-                    <div class="ws-right">
-                        <button class="btn-filter" onclick="handleAction('filter')"><span class="material-symbols-outlined">filter_list</span>Filter</button>
-                        <button class="btn-new" onclick="handleAction('new-workflow')"><span class="material-symbols-outlined">add</span>New Workflow</button>
-                    </div>
-                </div>
-
-                <!-- STATS -->
-                <div class="stats-row">
-                    <div class="stat-card"><div class="stat-icon si-blue"><span class="material-symbols-outlined">account_tree</span></div><div><div class="stat-val">6</div><div class="stat-lbl">Total Workflows</div></div></div>
-                    <div class="stat-card"><div class="stat-icon si-green"><span class="material-symbols-outlined">sync</span></div><div><div class="stat-val">1</div><div class="stat-lbl">Running</div></div></div>
-                    <div class="stat-card"><div class="stat-icon si-blue"><span class="material-symbols-outlined">check_circle</span></div><div><div class="stat-val">3</div><div class="stat-lbl">Completed</div></div></div>
-                    <div class="stat-card"><div class="stat-icon si-purple"><span class="material-symbols-outlined">schedule</span></div><div><div class="stat-val">2</div><div class="stat-lbl">Pending</div></div></div>
-                </div>
-
-                <!-- FILTER TABS -->
-                <div class="filter-tabs">
-                    <button class="ftab active">All <span class="count">6</span></button>
-                    <button class="ftab">Running <span class="count">1</span></button>
-                    <button class="ftab">Completed <span class="count">3</span></button>
-                    <button class="ftab">Pending <span class="count">2</span></button>
-                    <button class="ftab">Failed <span class="count">0</span></button>
-                </div>
-
-                <!-- WORKFLOW LIST -->
-                <div class="wf-list">
-                    <!-- 1. E-Commerce Re-platform (Running) -->
-                    <div class="wf-row" onclick="handleAction('open-workflow','E-Commerce Re-platform')">
-                        <div class="wf-icon"><span class="material-symbols-outlined">shopping_cart</span></div>
-                        <div class="wf-info">
-                            <div class="wf-name">E-Commerce Re-platform</div>
-                            <div class="wf-desc">Micro-frontend migration with real-time inventory management system</div>
-                        </div>
-                        <div class="wf-meta">
-                            <div class="wf-phases">
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-active"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <span class="wf-phase-label">2/4 phases</span>
-                            </div>
-                            <div class="wf-progress"><div class="wf-progress-fill wpf-blue" style="width:45%"></div></div>
-                            <span class="wf-pct">45%</span>
-                            <span class="wf-badge b-run">● Running</span>
-                            <span class="wf-time">2h ago</span>
-                        </div>
-                        <div class="wf-actions">
-                            <button class="wf-act-btn" title="Open"><span class="material-symbols-outlined">open_in_new</span></button>
-                            <button class="wf-act-btn delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','E-Commerce Re-platform')"><span class="material-symbols-outlined">delete</span></button>
-                        </div>
-                    </div>
-
-                    <!-- 2. FinTech Wallet API (Completed) -->
-                    <div class="wf-row" onclick="handleAction('open-workflow','FinTech Wallet API')">
-                        <div class="wf-icon"><span class="material-symbols-outlined">account_balance</span></div>
-                        <div class="wf-info">
-                            <div class="wf-name">FinTech Wallet API</div>
-                            <div class="wf-desc">Payment processing and ledger management system</div>
-                        </div>
-                        <div class="wf-meta">
-                            <div class="wf-phases">
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <span class="wf-phase-label">4/4 phases</span>
-                            </div>
-                            <div class="wf-progress"><div class="wf-progress-fill wpf-green" style="width:100%"></div></div>
-                            <span class="wf-pct">100%</span>
-                            <span class="wf-badge b-done">✓ Done</span>
-                            <span class="wf-time">Yesterday</span>
-                        </div>
-                        <div class="wf-actions">
-                            <button class="wf-act-btn" title="Open"><span class="material-symbols-outlined">open_in_new</span></button>
-                            <button class="wf-act-btn delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','FinTech Wallet API')"><span class="material-symbols-outlined">delete</span></button>
-                        </div>
-                    </div>
-
-                    <!-- 3. Patient Portal v2 (Pending) -->
-                    <div class="wf-row" onclick="handleAction('open-workflow','Patient Portal v2')">
-                        <div class="wf-icon"><span class="material-symbols-outlined">local_hospital</span></div>
-                        <div class="wf-info">
-                            <div class="wf-name">Patient Portal v2</div>
-                            <div class="wf-desc">HIPAA-compliant patient management dashboard</div>
-                        </div>
-                        <div class="wf-meta">
-                            <div class="wf-phases">
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <span class="wf-phase-label">0/4 phases</span>
-                            </div>
-                            <div class="wf-progress"><div class="wf-progress-fill wpf-gray" style="width:0%"></div></div>
-                            <span class="wf-pct">0%</span>
-                            <span class="wf-badge b-pend">◎ Pending</span>
-                            <span class="wf-time">3d ago</span>
-                        </div>
-                        <div class="wf-actions">
-                            <button class="wf-act-btn" title="Open"><span class="material-symbols-outlined">open_in_new</span></button>
-                            <button class="wf-act-btn delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','Patient Portal v2')"><span class="material-symbols-outlined">delete</span></button>
-                        </div>
-                    </div>
-
-                    <!-- 4. Supply Chain Tracker (Completed) -->
-                    <div class="wf-row" onclick="handleAction('open-workflow','Supply Chain Tracker')">
-                        <div class="wf-icon"><span class="material-symbols-outlined">local_shipping</span></div>
-                        <div class="wf-info">
-                            <div class="wf-name">Supply Chain Tracker</div>
-                            <div class="wf-desc">Real-time logistics and inventory tracking platform</div>
-                        </div>
-                        <div class="wf-meta">
-                            <div class="wf-phases">
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <span class="wf-phase-label">4/4 phases</span>
-                            </div>
-                            <div class="wf-progress"><div class="wf-progress-fill wpf-green" style="width:100%"></div></div>
-                            <span class="wf-pct">100%</span>
-                            <span class="wf-badge b-done">✓ Done</span>
-                            <span class="wf-time">5d ago</span>
-                        </div>
-                        <div class="wf-actions">
-                            <button class="wf-act-btn" title="Open"><span class="material-symbols-outlined">open_in_new</span></button>
-                            <button class="wf-act-btn delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','Supply Chain Tracker')"><span class="material-symbols-outlined">delete</span></button>
-                        </div>
-                    </div>
-
-                    <!-- 5. Learning Management System (Pending) -->
-                    <div class="wf-row" onclick="handleAction('open-workflow','Learning Management System')">
-                        <div class="wf-icon"><span class="material-symbols-outlined">school</span></div>
-                        <div class="wf-info">
-                            <div class="wf-name">Learning Management System</div>
-                            <div class="wf-desc">Course authoring, progress tracking & certification engine</div>
-                        </div>
-                        <div class="wf-meta">
-                            <div class="wf-phases">
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <div class="wf-phase-dot wpd-pending"></div>
-                                <span class="wf-phase-label">0/4 phases</span>
-                            </div>
-                            <div class="wf-progress"><div class="wf-progress-fill wpf-gray" style="width:0%"></div></div>
-                            <span class="wf-pct">0%</span>
-                            <span class="wf-badge b-pend">◎ Pending</span>
-                            <span class="wf-time">1w ago</span>
-                        </div>
-                        <div class="wf-actions">
-                            <button class="wf-act-btn" title="Open"><span class="material-symbols-outlined">open_in_new</span></button>
-                            <button class="wf-act-btn delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','Learning Management System')"><span class="material-symbols-outlined">delete</span></button>
-                        </div>
-                    </div>
-
-                    <!-- 6. DevOps Dashboard (Completed) -->
-                    <div class="wf-row" onclick="handleAction('open-workflow','DevOps Dashboard')">
-                        <div class="wf-icon"><span class="material-symbols-outlined">monitoring</span></div>
-                        <div class="wf-info">
-                            <div class="wf-name">DevOps Dashboard</div>
-                            <div class="wf-desc">CI/CD monitoring, deployment metrics & alerting system</div>
-                        </div>
-                        <div class="wf-meta">
-                            <div class="wf-phases">
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <div class="wf-phase-dot wpd-done"></div>
-                                <span class="wf-phase-label">4/4 phases</span>
-                            </div>
-                            <div class="wf-progress"><div class="wf-progress-fill wpf-green" style="width:100%"></div></div>
-                            <span class="wf-pct">100%</span>
-                            <span class="wf-badge b-done">✓ Done</span>
-                            <span class="wf-time">2w ago</span>
-                        </div>
-                        <div class="wf-actions">
-                            <button class="wf-act-btn" title="Open"><span class="material-symbols-outlined">open_in_new</span></button>
-                            <button class="wf-act-btn delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','DevOps Dashboard')"><span class="material-symbols-outlined">delete</span></button>
-                        </div>
+                    <div class="ph-right">
+                        <button class="btn-new" onclick="handleAction('new-workflow')"><span class="material-symbols-outlined">add</span> New Session</button>
                     </div>
                 </div>
+
+                <!-- FILTER BAR -->
+                <div class="filter-bar">
+                    <div class="search-box">
+                        <span class="material-symbols-outlined">search</span>
+                        <input type="text" id="search-input" placeholder="Search sessions..." oninput="applyFilters()">
+                    </div>
+                    <div class="filter-select">
+                        <select id="status-filter" onchange="applyFilters()">
+                            <option value="all">All Status</option>
+                            <option value="running">Running</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                            <option value="pending">Pending</option>
+                        </select>
+                    </div>
+                    <div class="filter-select">
+                        <select id="input-filter" onchange="applyFilters()">
+                            <option value="all">All Types</option>
+                            <option value="voice">🎤 Voice</option>
+                            <option value="document">📄 Document</option>
+                            <option value="text">📝 Text</option>
+                            <option value="mixed">📦 Mixed</option>
+                        </select>
+                    </div>
+                    <span class="filter-count" id="filter-count">${total} session${total !== 1 ? 's' : ''}</span>
+                </div>
+
+                <!-- WORKFLOW CARDS -->
+                ${workflows.length > 0 ? `
+                <div class="wf-cards">
+                    ${wfCardsHtml}
+                </div>
+                ` : `
+                <div class="empty">
+                    <div class="empty-icon"><span class="material-symbols-outlined">layers</span></div>
+                    <h3>No sessions yet</h3>
+                    <p>Start your first voice session to generate your SDLC documents.</p>
+                    <button class="btn-new" style="margin-top:20px" onclick="handleAction('new-workflow')"><span class="material-symbols-outlined">add</span> New Session</button>
+                </div>
+                `}
 
                 <!-- QUICK ACTIONS -->
                 <div class="qa-grid">
-                    <div class="qa" onclick="handleAction('new-workflow')">
-                        <div class="qa-icon qi-primary"><span class="material-symbols-outlined">add_circle</span></div>
-                        <div><div class="qa-label">New Workflow</div><div class="qa-desc">Create a new AI-powered pipeline</div></div>
-                    </div>
-                    <div class="qa" onclick="handleAction('import-workflow')">
-                        <div class="qa-icon qi-tertiary"><span class="material-symbols-outlined">upload_file</span></div>
-                        <div><div class="qa-label">Import Workflow</div><div class="qa-desc">Import from file or template</div></div>
-                    </div>
-                    <div class="qa" onclick="handleAction('view-logs')">
-                        <div class="qa-icon qi-amber"><span class="material-symbols-outlined">terminal</span></div>
-                        <div><div class="qa-label">View Logs</div><div class="qa-desc">Open terminal output</div></div>
-                    </div>
+                    <div class="qa" onclick="handleAction('new-workflow')"><div class="qa-icon qi-primary"><span class="material-symbols-outlined">add_circle</span></div><div><div class="qa-label">New Workflow</div><div class="qa-desc">Create a new AI-powered pipeline</div></div></div>
+                    <div class="qa" onclick="handleAction('refresh')"><div class="qa-icon qi-tertiary"><span class="material-symbols-outlined">refresh</span></div><div><div class="qa-label">Refresh</div><div class="qa-desc">Sync with Genesis Cloud</div></div></div>
+                    <div class="qa"><div class="qa-icon qi-amber"><span class="material-symbols-outlined">settings</span></div><div><div class="qa-label">Settings</div><div class="qa-desc">Manage API keys & config</div></div></div>
                 </div>
             </div>
-
             <script>
                 const vscode=acquireVsCodeApi();
-                function handleAction(c,v){vscode.postMessage(v?{command:c,name:v}:{command:c})}
-                document.querySelectorAll('.ftab').forEach(tab=>{
-                    tab.addEventListener('click',()=>{
-                        document.querySelectorAll('.ftab').forEach(t=>t.classList.remove('active'));
-                        tab.classList.add('active');
+                function handleAction(c,id,name){vscode.postMessage(id?{command:c,id:id,name:name}:{command:c})}
+                function applyFilters(){
+                    const search=document.getElementById('search-input').value.toLowerCase();
+                    const status=document.getElementById('status-filter').value;
+                    const input=document.getElementById('input-filter').value;
+                    let count=0;
+                    document.querySelectorAll('.wf-card').forEach(card=>{
+                        const matchSearch=!search||card.dataset.search.includes(search);
+                        const matchStatus=status==='all'||card.dataset.status===status;
+                        const matchInput=input==='all'||card.dataset.input===input;
+                        const show=matchSearch&&matchStatus&&matchInput;
+                        card.style.display=show?'':'none';
+                        if(show)count++;
                     });
-                });
+                    document.getElementById('filter-count').textContent=count+' session'+(count!==1?'s':'');
+                }
             </script>
         </body>
         </html>`;
     }
 }
-
-
