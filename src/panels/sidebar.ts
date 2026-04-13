@@ -34,7 +34,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     resolveWebviewView(webviewView: vscode.WebviewView) {
         this._webviewView = webviewView;
         webviewView.webview.options = { enableScripts: true, localResourceRoots: [this._extensionUri] };
-        webviewView.webview.html = this._getHtmlForWebview();
+        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'icon.png')).toString());
         if (this._service.getWorkflows().length > 0) this._updateWebview();
 
         webviewView.webview.onDidReceiveMessage((message) => {
@@ -64,7 +64,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     private _updateWebview() {
-        if (this._webviewView) this._webviewView.webview.html = this._getHtmlForWebview();
+        if (this._webviewView) {
+            const iconUri = this._webviewView.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'icon.png'));
+            this._webviewView.webview.html = this._getHtmlForWebview(iconUri.toString());
+        }
     }
 
     private _escapeHtml(text: string): string {
@@ -81,12 +84,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         return `${Math.floor(h / 24)}d ago`;
     }
 
-    private _getHtmlForWebview(): string {
-        if (this._agentMode) return this._getAgentSidebarHtml();
-        return this._getNormalSidebarHtml();
+    private _getHtmlForWebview(iconSrc: string): string {
+        if (this._agentMode) return this._getAgentSidebarHtml(iconSrc);
+        return this._getNormalSidebarHtml(iconSrc);
     }
 
-    private _getNormalSidebarHtml(): string {
+    private _getNormalSidebarHtml(iconSrc: string): string {
         const workflows = this._service.getWorkflows().slice(0, 5);
         const user = this._service.getUserProfile();
         const connected = this._service.isConnected();
@@ -128,8 +131,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 ::-webkit-scrollbar-thumb:hover{background:#505866}
                 .sidebar{display:flex;flex-direction:column;height:100%;background-color:#1B1B1C;font-size:.75rem;letter-spacing:tight}
                 .sidebar-header{padding:24px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(64,71,82,.1)}
-                .header-logo{width:32px;height:32px;border-radius:8px;background:linear-gradient(180deg,#A3C9FF 0%,#0078D4 100%);display:flex;align-items:center;justify-content:center;flex-shrink:0}
-                .header-logo .material-symbols-outlined{font-size:20px;color:#131313}
+                .header-logo{width:32px;height:32px;border-radius:8px;overflow:hidden;flex-shrink:0}
+                .header-logo img{width:100%;height:100%;object-fit:contain}
                 .header-text h1{font-family:'Space Grotesk',sans-serif;font-size:1.125rem;font-weight:700;letter-spacing:-.02em;color:#A3C9FF;line-height:1}
                 .header-text p{font-size:10px;text-transform:uppercase;letter-spacing:.15em;color:#C0C7D4;opacity:.6;margin-top:2px}
                 .cta-section{padding:20px 20px}
@@ -181,7 +184,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         <body>
             <div class="sidebar">
                 <div class="sidebar-header">
-                    <div class="header-logo"><span class="material-symbols-outlined">hexagon</span></div>
+                    <div class="header-logo"><img src="${iconSrc}" alt="Genesis AI" /></div>
                     <div class="header-text"><h1>Genesis</h1><p>AI SDLC Architect</p></div>
                 </div>
                 <div class="cta-section">
@@ -232,7 +235,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         </html>`;
     }
 
-    private _getAgentSidebarHtml(): string {
+    private _getAgentSidebarHtml(iconSrc: string): string {
         const wfId = this._agentWorkflowId;
         const wf = wfId ? this._service.getWorkflowById(wfId) : null;
         const status = wf?.pipelineStatus;
@@ -275,8 +278,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 .back-btn:hover{background:#353535;color:#e5e2e1}
                 .back-btn .material-symbols-outlined{font-size:16px}
                 .agent-title{display:flex;align-items:center;gap:12px}
-                .agent-avatar{width:32px;height:32px;border-radius:8px;background:linear-gradient(180deg,#A3C9FF 0%,#0078D4 100%);display:flex;align-items:center;justify-content:center;flex-shrink:0}
-                .agent-avatar .material-symbols-outlined{font-size:18px;color:#131313}
+                .agent-avatar{width:32px;height:32px;border-radius:8px;overflow:hidden;flex-shrink:0}
+                .agent-avatar img{width:100%;height:100%;object-fit:contain}
                 .agent-info{flex:1;min-width:0}
                 .agent-info h2{font-family:'Space Grotesk',sans-serif;font-size:.8125rem;font-weight:700;color:#e5e2e1}
                 .agent-info p{font-size:.5625rem;color:#8a919e}
@@ -312,7 +315,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 <div class="agent-header">
                     <button class="back-btn" onclick="handleClick('back-to-workflows')"><span class="material-symbols-outlined">arrow_back</span> Back</button>
                     <div class="agent-title">
-                        <div class="agent-avatar"><span class="material-symbols-outlined">smart_toy</span></div>
+                        <div class="agent-avatar"><img src="${iconSrc}" alt="Genesis AI" /></div>
                         <div class="agent-info">
                             <h2>Genesis Agent</h2>
                             <p>${this._agentWorkflowName}</p>
