@@ -137,7 +137,7 @@ export class ExportDialogModal {
                             <h2>Export Documents</h2>
                             <button class="close-btn" onclick="handleAction('cancel')"><span class="material-symbols-outlined">close</span></button>
                         </div>
-                        <p>${this._workflowName} — ${completedDocs.length} of ${docStatuses.length} documents ready</p>
+                        <p>${this._workflowName} — ${completedDocs.length} of ${docStatuses.length} documents ready to export as ZIP</p>
                     </div>
                     <div class="modal-body">
                         <div>
@@ -165,7 +165,7 @@ export class ExportDialogModal {
                         </div>
                         <div style="display:flex;gap:12px">
                             <button class="btn btn-ghost" onclick="handleAction('cancel')">Cancel</button>
-                            <button class="btn btn-primary" onclick="startExport()"><span class="material-symbols-outlined">ios_share</span> Export</button>
+                            <button class="btn btn-primary" onclick="startExport()"><span class="material-symbols-outlined">folder_zip</span> Export ZIP</button>
                         </div>
                     </div>
                 </div>

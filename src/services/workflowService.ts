@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as zlib from 'zlib';
 import {
     GenesisApi,
     Workflow,
@@ -331,18 +332,17 @@ export class WorkflowService {
         try {
             const safeName = (workflowName || 'export').replace(/[^a-zA-Z0-9_\-.]/g, '_');
 
-            // Pick a folder to save all documents into
-            const folderUri = await vscode.window.showOpenDialog({
-                canSelectFiles: false,
-                canSelectFolders: true,
-                canSelectMany: false,
-                openLabel: 'Select folder to export documents',
-                title: 'Export Documents — Select Destination Folder',
+            // Ask user where to save the ZIP
+            const defaultZipName = `${safeName}_Documents.zip`;
+            const zipUri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(defaultZipName),
+                filters: { 'ZIP Archive': ['zip'] },
+                title: 'Export Documents — Save ZIP Archive',
             });
-            if (!folderUri || folderUri.length === 0) { return null; }
-            const destFolder = folderUri[0];
+            if (!zipUri) { return null; }
 
-            let exported = 0;
+            // Collect all document contents
+            const files: { name: string; content: Buffer }[] = [];
             let failed = 0;
 
             for (const docType of selectedTypes) {
@@ -358,8 +358,7 @@ export class WorkflowService {
                     }
 
                     const ext = format === 'json' ? 'json' : 'md';
-                    const fileName = `${safeName}_${safeDocName}.${ext}`;
-                    const fileUri = vscode.Uri.joinPath(destFolder, fileName);
+                    const fileName = `${safeDocName}.${ext}`;
 
                     let fileContent: string;
                     if (format === 'json') {
@@ -368,29 +367,132 @@ export class WorkflowService {
                         fileContent = artifact.content;
                     }
 
-                    await vscode.workspace.fs.writeFile(fileUri, Buffer.from(fileContent, 'utf-8'));
-                    exported++;
+                    files.push({ name: fileName, content: Buffer.from(fileContent, 'utf-8') });
                 } catch (err: any) {
-                    console.error(`Failed to export ${docType}:`, err.message);
+                    console.error(`Failed to fetch ${docType}:`, err.message);
                     failed++;
                 }
             }
 
-            if (exported > 0) {
-                const msg = failed > 0
-                    ? `Exported ${exported} of ${selectedTypes.length} documents to ${destFolder.fsPath} (${failed} failed)`
-                    : `Exported ${exported} documents to ${destFolder.fsPath}`;
-                vscode.window.showInformationMessage(msg);
-                // Reveal the folder in the OS file explorer
-                vscode.commands.executeCommand('revealFileInOS', destFolder);
-            } else {
+            if (files.length === 0) {
                 vscode.window.showWarningMessage('No documents could be exported. Ensure documents are generated before exporting.');
+                return null;
             }
-            return destFolder.fsPath;
+
+            // Build ZIP file in memory
+            const zipBuffer = await this._createZip(files);
+
+            // Write ZIP to disk
+            await vscode.workspace.fs.writeFile(zipUri, zipBuffer);
+
+            const msg = failed > 0
+                ? `Exported ${files.length} of ${selectedTypes.length} documents to ${zipUri.fsPath} (${failed} failed)`
+                : `Exported ${files.length} documents to ${zipUri.fsPath}`;
+            vscode.window.showInformationMessage(msg);
+            // Reveal the ZIP file in the OS file explorer
+            vscode.commands.executeCommand('revealFileInOS', zipUri);
+            return zipUri.fsPath;
         } catch (e: any) {
             vscode.window.showErrorMessage(`Export failed: ${e.message}`);
         }
         return null;
+    }
+
+    /**
+     * Create a ZIP archive buffer from a list of files using Node.js built-in zlib.
+     * No external dependencies required.
+     */
+    private _createZip(files: { name: string; content: Buffer }[]): Promise<Buffer> {
+        return new Promise((resolve, reject) => {
+            const localHeaders: Buffer[] = [];
+            const centralHeaders: Buffer[] = [];
+            let offset = 0;
+
+            const enc = new TextEncoder();
+            let pending = files.length;
+
+            if (pending === 0) {
+                // Build empty ZIP
+                const eocd = Buffer.alloc(22);
+                eocd.writeUInt32LE(0x06054b50, 0); // EOCD signature
+                resolve(eocd);
+                return;
+            }
+
+            for (let i = 0; i < files.length; i++) {
+                const fileNameBuf = Buffer.from(files[i].name, 'utf-8');
+                const rawData = files[i].content;
+
+                zlib.deflateRaw(rawData, (err, compressedResult: Buffer) => {
+                    if (err) {
+                        // Fallback: store uncompressed
+                        compressedResult = rawData;
+                    }
+
+                    const crc = crc32(rawData);
+                    const method = compressedResult.length < rawData.length ? 8 : 0; // 8=deflate, 0=stored
+                    const finalData: Buffer = method === 8 ? compressedResult : rawData;
+
+                    // Local file header (30 + filename)
+                    const local = Buffer.alloc(30 + fileNameBuf.length + finalData.length);
+                    local.writeUInt32LE(0x04034b50, 0);      // signature
+                    local.writeUInt16LE(20, 4);                // version needed
+                    local.writeUInt16LE(0, 6);                 // flags
+                    local.writeUInt16LE(method, 8);            // compression method
+                    local.writeUInt16LE(0, 10);                // mod time
+                    local.writeUInt16LE(0, 12);                // mod date
+                    local.writeUInt32LE(crc, 14);              // crc32
+                    local.writeUInt32LE(finalData.length, 18); // compressed size
+                    local.writeUInt32LE(rawData.length, 22);   // uncompressed size
+                    local.writeUInt16LE(fileNameBuf.length, 26); // filename length
+                    local.writeUInt16LE(0, 28);                // extra field length
+                    fileNameBuf.copy(local, 30);               // filename
+                    finalData.copy(local, 30 + fileNameBuf.length); // data
+                    localHeaders.push(local);
+
+                    // Central directory header (46 + filename)
+                    const central = Buffer.alloc(46 + fileNameBuf.length);
+                    central.writeUInt32LE(0x02014b50, 0);       // signature
+                    central.writeUInt16LE(20, 4);                 // version made by
+                    central.writeUInt16LE(20, 6);                 // version needed
+                    central.writeUInt16LE(0, 8);                  // flags
+                    central.writeUInt16LE(method, 10);            // compression method
+                    central.writeUInt16LE(0, 12);                 // mod time
+                    central.writeUInt16LE(0, 14);                 // mod date
+                    central.writeUInt32LE(crc, 16);               // crc32
+                    central.writeUInt32LE(finalData.length, 20);  // compressed size
+                    central.writeUInt32LE(rawData.length, 24);    // uncompressed size
+                    central.writeUInt16LE(fileNameBuf.length, 28); // filename length
+                    central.writeUInt16LE(0, 30);                 // extra field length
+                    central.writeUInt16LE(0, 32);                 // file comment length
+                    central.writeUInt16LE(0, 34);                 // disk number start
+                    central.writeUInt16LE(0, 36);                 // internal file attributes
+                    central.writeUInt32LE(0, 38);                 // external file attributes
+                    central.writeUInt32LE(offset, 42);            // relative offset of local header
+                    fileNameBuf.copy(central, 46);                // filename
+                    centralHeaders.push(central);
+
+                    offset += local.length;
+
+                    pending--;
+                    if (pending === 0) {
+                        // All files processed — assemble final ZIP
+                        const centralSize = centralHeaders.reduce((s, b) => s + b.length, 0);
+                        const eocd = Buffer.alloc(22);
+                        eocd.writeUInt32LE(0x06054b50, 0);           // EOCD signature
+                        eocd.writeUInt16LE(0, 4);                     // disk number
+                        eocd.writeUInt16LE(0, 6);                     // central dir disk
+                        eocd.writeUInt16LE(files.length, 8);          // entries on disk
+                        eocd.writeUInt16LE(files.length, 10);         // total entries
+                        eocd.writeUInt32LE(centralSize, 12);          // central dir size
+                        eocd.writeUInt32LE(offset, 16);               // central dir offset
+                        eocd.writeUInt16LE(0, 20);                    // comment length
+
+                        resolve(Buffer.concat([...localHeaders, ...centralHeaders, eocd]));
+                    }
+                });
+            }
+        });
     }
 
     async exportDocuments(workflowId: string, format: 'json' | 'markdown' = 'markdown'): Promise<string | null> {
@@ -499,3 +601,27 @@ export class WorkflowService {
         this.events.dispose();
     }
 }
+
+/**
+ * Compute CRC32 checksum (used by ZIP format).
+ * Uses a pre-computed lookup table for performance.
+ */
+function crc32(buf: Buffer): number {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+        crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xFF];
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+const CRC_TABLE = (() => {
+    const table: number[] = [];
+    for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let j = 0; j < 8; j++) {
+            c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        }
+        table.push(c >>> 0);
+    }
+    return table;
+})();
