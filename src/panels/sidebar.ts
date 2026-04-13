@@ -67,6 +67,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         if (this._webviewView) this._webviewView.webview.html = this._getHtmlForWebview();
     }
 
+    private _escapeHtml(text: string): string {
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     private _timeAgo(ts: number): string {
         const d = Date.now() - ts;
         const m = Math.floor(d / 60000);
@@ -88,13 +92,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         const connected = this._service.isConnected();
 
         const wfItemsHtml = workflows.map(wf => {
+            const displayName = this._escapeHtml(wf.productName || wf.workflowName || 'Untitled');
+            const safeId = this._escapeHtml(wf._id);
+            const safeName = this._escapeHtml(wf.workflowName || 'Untitled');
             const statusHtml = wf.status === 'running' ? '<div class="wf-status-running"></div>' :
                 wf.status === 'completed' ? '<div class="wf-status-completed"><span class="material-symbols-outlined">check_circle</span></div>' :
+                wf.status === 'failed' ? '<div class="wf-status-failed"><span class="material-symbols-outlined">error</span></div>' :
                 '<div class="wf-status-pending"></div>';
+            const pct = wf.totalSteps > 0 ? Math.round((wf.currentStep / wf.totalSteps) * 100) : 0;
+            const statusText = wf.status.charAt(0).toUpperCase() + wf.status.slice(1);
+            const progressHtml = wf.status === 'running' ? `<div class="wf-mini-progress"><div class="wf-mini-fill" style="width:${pct}%"></div></div>` : '';
             return `
-            <div class="workflow-item" onclick="handleClick('open-workflow','${wf._id}','${wf.workflowName.replace(/'/g, "\\'")}')">
-                <div class="wf-top"><span class="wf-name">${wf.workflowName}</span>${statusHtml}</div>
-                <div class="wf-bottom"><span>Status: ${wf.status.charAt(0).toUpperCase() + wf.status.slice(1)}</span><span>${this._timeAgo(wf.createdAt)}</span></div>
+            <div class="workflow-item" onclick="handleClick('open-workflow','${safeId}','${safeName}')">
+                <div class="wf-top"><span class="wf-name">${displayName}</span>${statusHtml}</div>
+                <div class="wf-bottom"><span>${statusText}${wf.status === 'running' ? ` · ${pct}%` : ''}</span><span>${this._timeAgo(wf.createdAt)}</span></div>
+                ${progressHtml}
             </div>`;
         }).join('');
 
@@ -144,6 +156,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 .wf-status-completed{display:flex;align-items:center;justify-content:center;width:14px;height:14px;flex-shrink:0}
                 .wf-status-completed .material-symbols-outlined{font-size:14px;color:#777677}
                 .wf-status-pending{width:8px;height:8px;border-radius:50%;border:1px solid rgba(192,199,212,.4);flex-shrink:0}
+                .wf-status-failed{display:flex;align-items:center;justify-content:center;width:14px;height:14px;flex-shrink:0}
+                .wf-status-failed .material-symbols-outlined{font-size:14px;color:#ffb4ab}
+                .wf-mini-progress{height:2px;background:#202020;border-radius:9999px;overflow:hidden;margin-top:6px}
+                .wf-mini-fill{height:100%;background:linear-gradient(90deg,#61dac1,#A3C9FF);border-radius:9999px;transition:width .5s ease}
                 .wf-bottom{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:rgba(192,199,212,.6)}
                 .actions-section{padding:16px;border-top:1px solid rgba(64,71,82,.1);margin:0 8px}
                 .action-button{display:flex;align-items:center;gap:12px;padding:8px 12px;background-color:rgba(53,53,53,.3);border:none;border-radius:4px;color:#C0C7D4;font-family:'Inter',sans-serif;font-size:11px;cursor:pointer;transition:all .15s ease;width:100%;margin-bottom:8px}
@@ -201,6 +217,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             <script>
                 const vscode=acquireVsCodeApi();
                 function handleClick(command,element){
+                    if(command==='open-workflow'){
+                        vscode.postMessage({command:command,id:element,name:arguments[2]});
+                        return;
+                    }
                     vscode.postMessage({command:command});
                     if(element&&element.classList.contains('nav-item')){
                         document.querySelectorAll('.nav-item').forEach(i=>{i.classList.remove('active')});

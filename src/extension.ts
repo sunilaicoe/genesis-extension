@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext) {
         },
         onOpenWorkflowDetail: (workflowId: string, name: string) => {
             WorkflowDetailPanel.open(context.extensionUri, workflowService, workflowId, name);
-            sidebarProvider.enterAgentMode(name);
+            sidebarProvider.enterAgentMode(name, workflowId);
         },
         onBackToWorkflows: () => {
             WorkflowDetailPanel.close();
@@ -80,7 +80,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Wire WorkflowPanel callbacks
     WorkflowPanel.setOpenDetail((workflowId: string, name: string) => {
         WorkflowDetailPanel.open(context.extensionUri, workflowService, workflowId, name);
-        sidebarProvider.enterAgentMode(name);
+        sidebarProvider.enterAgentMode(name, workflowId);
     });
     WorkflowPanel.setNewWorkflow(() => NewWorkflowModal.open(context.extensionUri, workflowService));
 
@@ -103,7 +103,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Wire NewWorkflowModal callbacks
     NewWorkflowModal.setOnCreate((workflowId: string, name: string) => {
         WorkflowDetailPanel.open(context.extensionUri, workflowService, workflowId, name);
-        sidebarProvider.enterAgentMode(name);
+        sidebarProvider.enterAgentMode(name, workflowId);
     });
 
     // Wire WorkflowEditorPanel callbacks
