@@ -327,6 +327,72 @@ export class WorkflowService {
         return false;
     }
 
+    async exportAllDocuments(workflowId: string, workflowName: string, selectedTypes: string[], format: 'json' | 'markdown' = 'markdown'): Promise<string | null> {
+        try {
+            const safeName = (workflowName || 'export').replace(/[^a-zA-Z0-9_\-.]/g, '_');
+
+            // Pick a folder to save all documents into
+            const folderUri = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select folder to export documents',
+                title: 'Export Documents — Select Destination Folder',
+            });
+            if (!folderUri || folderUri.length === 0) { return null; }
+            const destFolder = folderUri[0];
+
+            let exported = 0;
+            let failed = 0;
+
+            for (const docType of selectedTypes) {
+                try {
+                    const docInfo = DOCUMENT_TYPES.find(d => d.type === docType);
+                    const docTitle = docInfo?.title || docType;
+                    const safeDocName = docTitle.replace(/[^a-zA-Z0-9_\-.]/g, '_');
+
+                    const artifact = await this.fetchArtifact(workflowId, docType);
+                    if (!artifact || !artifact.content) {
+                        failed++;
+                        continue;
+                    }
+
+                    const ext = format === 'json' ? 'json' : 'md';
+                    const fileName = `${safeName}_${safeDocName}.${ext}`;
+                    const fileUri = vscode.Uri.joinPath(destFolder, fileName);
+
+                    let fileContent: string;
+                    if (format === 'json') {
+                        fileContent = JSON.stringify(artifact, null, 2);
+                    } else {
+                        fileContent = artifact.content;
+                    }
+
+                    await vscode.workspace.fs.writeFile(fileUri, Buffer.from(fileContent, 'utf-8'));
+                    exported++;
+                } catch (err: any) {
+                    console.error(`Failed to export ${docType}:`, err.message);
+                    failed++;
+                }
+            }
+
+            if (exported > 0) {
+                const msg = failed > 0
+                    ? `Exported ${exported} of ${selectedTypes.length} documents to ${destFolder.fsPath} (${failed} failed)`
+                    : `Exported ${exported} documents to ${destFolder.fsPath}`;
+                vscode.window.showInformationMessage(msg);
+                // Reveal the folder in the OS file explorer
+                vscode.commands.executeCommand('revealFileInOS', destFolder);
+            } else {
+                vscode.window.showWarningMessage('No documents could be exported. Ensure documents are generated before exporting.');
+            }
+            return destFolder.fsPath;
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Export failed: ${e.message}`);
+        }
+        return null;
+    }
+
     async exportDocuments(workflowId: string, format: 'json' | 'markdown' = 'markdown'): Promise<string | null> {
         try {
             const res = await this.api.exportDocuments(workflowId, format);

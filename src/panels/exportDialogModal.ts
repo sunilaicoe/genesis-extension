@@ -26,8 +26,15 @@ export class ExportDialogModal {
 
     private async _handleExport(message: any) {
         const format = message.format || 'markdown';
+        const selectedTypes: string[] = message.selectedTypes || [];
+
+        if (selectedTypes.length === 0) {
+            vscode.window.showWarningMessage('No documents selected for export.');
+            return;
+        }
+
         try {
-            await this._service.exportDocuments(this._workflowId, format as 'json' | 'markdown');
+            await this._service.exportAllDocuments(this._workflowId, this._workflowName, selectedTypes, format as 'json' | 'markdown');
             this._panel.dispose();
         } catch (e: any) {
             vscode.window.showErrorMessage(`Export failed: ${e.message}`);
@@ -51,7 +58,7 @@ export class ExportDialogModal {
             const icon = docInfo?.icon || 'description';
             const title = docInfo?.title || d.type;
             return `
-            <div class="doc-row" onclick="toggleCheck(this)">
+            <div class="doc-row" data-type="${d.type}" onclick="toggleCheck(this)">
                 <div class="custom-cb checked"></div>
                 <span class="material-symbols-outlined" style="font-size:16px;color:#61dac1">${icon}</span>
                 <span class="doc-name">${title}</span>
@@ -167,11 +174,27 @@ export class ExportDialogModal {
                 const vscode=acquireVsCodeApi();
                 var selectedFormat='markdown';
                 function handleAction(c){vscode.postMessage({command:c})}
-                function selectFormat(el){document.querySelectorAll('.format-card').forEach(c=>c.classList.remove('selected'));el.classList.add('selected')}
+                function selectFormat(el){
+                    document.querySelectorAll('.format-card').forEach(c=>c.classList.remove('selected'));
+                    el.classList.add('selected');
+                    var label=el.querySelector('span:last-child').textContent.trim().toLowerCase();
+                    if(label==='pdf')selectedFormat='markdown';
+                    else if(label==='html')selectedFormat='markdown';
+                    else if(label==='json')selectedFormat='json';
+                    else selectedFormat='markdown';
+                }
                 function toggleCheck(row){var cb=row.querySelector('.custom-cb');if(cb)cb.classList.toggle('checked')}
-                function toggleAll(el){var isChecked=el.classList.contains('checked');el.classList.toggle('checked');document.querySelectorAll('.doc-row').forEach(function(r){var cb=r.querySelector('.custom-cb');if(cb){if(isChecked){cb.classList.remove('checked')}else{cb.classList.add('checked')}}})}
+                function toggleAll(el){var isChecked=el.classList.contains('checked');el.classList.toggle('checked');document.querySelectorAll('.doc-row .custom-cb').forEach(function(cb){if(!cb.closest('.doc-row').style.opacity){if(isChecked)cb.classList.remove('checked');else cb.classList.add('checked')}})}
                 function startExport(){
-                    vscode.postMessage({command:'export',format:selectedFormat});
+                    var selected=[];
+                    document.querySelectorAll('.doc-row').forEach(function(row){
+                        var cb=row.querySelector('.custom-cb');
+                        if(cb&&cb.classList.contains('checked')){
+                            var t=row.getAttribute('data-type');
+                            if(t)selected.push(t);
+                        }
+                    });
+                    vscode.postMessage({command:'export',format:selectedFormat,selectedTypes:selected});
                     var fill=document.getElementById('export-progress');
                     if(fill)fill.style.width='100%';
                 }
