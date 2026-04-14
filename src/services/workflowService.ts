@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
+import * as path from 'path';
 import {
     GenesisApi,
     Workflow,
@@ -8,6 +9,7 @@ import {
     UserProfile,
     DOCUMENT_TYPES,
 } from '../api/genesisApi';
+import { LocalStorageService, LocalWorkflow } from './localStorageService';
 
 export interface WorkflowWithStatus extends Workflow {
     pipelineStatus?: PipelineStatus;
@@ -50,11 +52,17 @@ export class WorkflowService {
     private _userProfile: UserProfile | null = null;
     private _isConnected = false;
 
+    // Local workflow support
+    public readonly localStorage: LocalStorageService;
+    private _localWorkflows: Map<string, LocalWorkflow> = new Map();
+    private _currentLocalWorkflowId: string | null = null;
+
     readonly events = new GenesisEventEmitter();
     readonly onEvent = this.events.event;
 
     constructor(secretStorage: vscode.SecretStorage) {
         this.api = new GenesisApi(secretStorage);
+        this.localStorage = new LocalStorageService();
     }
 
     getApi(): GenesisApi { return this.api; }
@@ -596,9 +604,372 @@ export class WorkflowService {
         });
     }
 
+    // ─── LOCAL WORKFLOW METHODS ────────────────────────────────────────
+
+    /**
+     * Create a cloud workflow via the Genesis API pipeline and save
+     * all generated documents to a local folder.
+     * This is the "best of both worlds" — real AI output saved locally.
+     */
+/**
+     * Create a cloud workflow, start the AI pipeline, open the detail panel
+     * immediately with "Waiting for cloud...", then save cloud output locally
+     * when done. Returns the local workflow ID right away (status = running).
+     *
+     * The caller should open WorkflowDetailPanel immediately with the returned ID.
+     * The panel will auto-update via events as the pipeline progresses.
+     */
+    async createCloudToLocalWorkflow(
+        workflowName: string,
+        productName: string,
+        transcript: string,
+        outputFolder: string,
+        autoStart: boolean = true,
+        onProgress?: (step: number, total: number, message: string) => void
+    ): Promise<{ workflowId: string } | null> {
+        try {
+            // ─── Step 1: Create cloud workflow ───────────────────────────────
+            onProgress?.(0, 20, 'Creating cloud workflow...');
+            const createRes = await this.api.createWorkflow(workflowName, productName);
+            if (!createRes.success) throw new Error(createRes.message || 'Failed to create workflow');
+            const cloudWorkflowId = createRes.workflowId;
+
+            // ─── Step 2: Upload transcript ───────────────────────────────────
+            onProgress?.(0, 20, 'Uploading requirements...');
+            if (transcript && transcript.length > 0) {
+                await this.api.updateTranscript(cloudWorkflowId, transcript);
+            }
+
+            // ─── Step 3: Start the AI pipeline ───────────────────────────────
+            if (autoStart) {
+                onProgress?.(0, 20, 'Starting AI pipeline...');
+                await this.api.startPipeline(cloudWorkflowId);
+            }
+
+            // ─── Step 4: Create a local "pending" workflow immediately ───────
+            //     This lets us open the detail panel right away.
+            const localWf = await this.localStorage.createPendingCloudWorkflow(
+                workflowName, productName, outputFolder, cloudWorkflowId
+            );
+            this._localWorkflows.set(localWf.id, localWf);
+
+            // Fire event so any open detail panel refreshes
+            this.events.fire('local-workflow-updated', { workflowId: localWf.id, workflow: localWf });
+
+            // ─── Step 5: Poll the cloud pipeline in the background ──────────
+            //     Update the local workflow status as agents complete.
+            this._pollCloudPipelineToLocal(
+                cloudWorkflowId, localWf.id, outputFolder, workflowName, productName, onProgress
+            );
+
+            // Return the local workflow ID immediately — panel opens now
+            return { workflowId: localWf.id };
+
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Cloud pipeline failed: ${e.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Background: poll the cloud pipeline, update local workflow status,
+     * and when complete download all artifacts and save locally.
+     */
+    private _pollCloudPipelineToLocal(
+        cloudWorkflowId: string,
+        localWorkflowId: string,
+        outputFolder: string,
+        workflowName: string,
+        productName: string,
+        onProgress?: (step: number, total: number, message: string) => void
+    ): void {
+        const MAX_POLL_TIME = 10 * 60 * 1000; // 10 minutes
+        const POLL_INTERVAL = 5000; // 5 seconds
+        const startTime = Date.now();
+        // Track which artifact types we've already saved locally
+        const savedTypes = new Set<string>();
+
+        const poll = async () => {
+            try {
+                const status = await this.api.getPipelineStatus(cloudWorkflowId);
+                const step = status.progress?.currentStep || 0;
+                const total = status.progress?.totalSteps || 20;
+                const agentName = status.progress?.currentAgent || '';
+
+                onProgress?.(step, total, step > 0 ? `Agent ${step}/${total}: ${agentName}` : 'Pipeline starting...');
+
+                // ─── Check each execution: if completed, download & save immediately ─
+                for (const exec of (status.executions || [])) {
+                    if (exec.status !== 'completed' && exec.status !== 'failed') continue;
+
+                    // Map agentId → document type (e.g. "agent-01-vision" → "vision")
+                    const docType = exec.agentId.replace(/^agent-\d+-/, '');
+                    if (!docType || savedTypes.has(docType)) continue;
+
+                    if (exec.status === 'completed') {
+                        // ─── Download THIS artifact from the cloud right now ───────
+                        try {
+                            const artRes = await this.api.getArtifact(cloudWorkflowId, docType);
+                            if (artRes.success && artRes.artifact?.content) {
+                                // Save to local disk immediately
+                                const saved = this.localStorage.saveSingleCloudArtifact(
+                                    localWorkflowId,
+                                    { type: docType, title: artRes.artifact.title, content: artRes.artifact.content }
+                                );
+                                if (saved) {
+                                    savedTypes.add(docType);
+                                    console.log(`[Genesis] ✅ Saved ${docType} to local disk (${artRes.artifact.content.length} chars)`);
+                                }
+                            }
+                        } catch (downloadErr: any) {
+                            console.error(`[Genesis] Failed to download ${docType}:`, downloadErr.message);
+                        }
+                    } else if (exec.status === 'failed') {
+                        // Mark as failed in local workflow
+                        const wf = this.localStorage.getWorkflow(localWorkflowId);
+                        if (wf) {
+                            const doc = wf.documents.find(d => d.type === docType);
+                            if (doc && doc.status !== 'completed') {
+                                doc.status = 'failed';
+                                doc.error = exec.error || 'Agent failed';
+                            }
+                        }
+                        savedTypes.add(docType);
+                    }
+                }
+
+                // Update the local workflow progress for the panel
+                const updatedWf = this.localStorage.getWorkflow(localWorkflowId);
+                if (updatedWf) {
+                    const doneCount = updatedWf.documents.filter(d => d.status === 'completed').length;
+                    updatedWf.currentStep = doneCount;
+                    updatedWf.totalSteps = total;
+                    updatedWf.description = `Cloud pipeline: ${doneCount}/${total} documents saved locally`;
+                    this._localWorkflows.set(localWorkflowId, updatedWf);
+                    this.events.fire('local-workflow-updated', { workflowId: localWorkflowId, workflow: updatedWf });
+                }
+
+                // ─── Check if pipeline is fully complete ─────────────────────
+                if (status.isComplete || status.workflow?.status === 'completed') {
+                    // Final sweep: download any artifacts we somehow missed
+                    const finalWf = this.localStorage.getWorkflow(localWorkflowId);
+                    const missed = finalWf?.documents.filter(d => d.status !== 'completed') || [];
+                    if (missed.length > 0) {
+                        onProgress?.(total, total, `Fetching ${missed.length} remaining documents...`);
+                        try {
+                            const allArtifacts = await this.api.listArtifacts(cloudWorkflowId);
+                            if (allArtifacts.success && allArtifacts.artifacts) {
+                                for (const art of allArtifacts.artifacts) {
+                                    if (!savedTypes.has(art.type) && art.content) {
+                                        this.localStorage.saveSingleCloudArtifact(
+                                            localWorkflowId,
+                                            { type: art.type, title: art.title, content: art.content }
+                                        );
+                                        savedTypes.add(art.type);
+                                    }
+                                }
+                            }
+                        } catch (e: any) {
+                            console.error('[Genesis] Final artifact sweep failed:', e.message);
+                        }
+                    }
+
+                    // Mark complete
+                    const completedWf = this.localStorage.getWorkflow(localWorkflowId);
+                    if (completedWf) {
+                        const doneCount = completedWf.documents.filter(d => d.status === 'completed').length;
+                        completedWf.status = 'completed';
+                        completedWf.currentStep = completedWf.totalSteps;
+                        completedWf.description = `All ${doneCount} documents generated by AI pipeline and saved locally.`;
+                        this._localWorkflows.set(localWorkflowId, completedWf);
+                        this.events.fire('local-workflow-completed', { workflowId: localWorkflowId, workflow: completedWf });
+
+                        onProgress?.(total, total, `✅ All ${doneCount} documents saved!`);
+
+                        const notifyFolder = completedWf.outputFolder;
+                        vscode.window.showInformationMessage(
+                            `✅ ${doneCount} AI-generated documents saved to: ${notifyFolder}`,
+                            'Open Folder'
+                        ).then(choice => {
+                            if (choice === 'Open Folder') {
+                                vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(notifyFolder));
+                            }
+                        });
+                    }
+
+                    return; // Done polling
+
+                } else if (status.workflow?.status === 'failed') {
+                    this.localStorage.updateCloudPollStatus(localWorkflowId, 'failed');
+                    const failWf = this.localStorage.getWorkflow(localWorkflowId);
+                    if (failWf) {
+                        this._localWorkflows.set(localWorkflowId, failWf);
+                        this.events.fire('local-workflow-updated', { workflowId: localWorkflowId, workflow: failWf });
+                    }
+                    vscode.window.showErrorMessage('Cloud pipeline failed. Check the Genesis dashboard.');
+                    return;
+                }
+
+                // Check timeout
+                if ((Date.now() - startTime) >= MAX_POLL_TIME) {
+                    this.localStorage.updateCloudPollStatus(localWorkflowId, 'failed');
+                    vscode.window.showErrorMessage('Cloud pipeline timed out after 10 minutes.');
+                    return;
+                }
+
+                // Schedule next poll
+                setTimeout(poll, POLL_INTERVAL);
+
+            } catch (e: any) {
+                console.error('Poll error:', e.message);
+                // Don't fail on a single poll error — retry
+                if ((Date.now() - startTime) < MAX_POLL_TIME) {
+                    setTimeout(poll, POLL_INTERVAL);
+                } else {
+                    this.localStorage.updateCloudPollStatus(localWorkflowId, 'failed');
+                    vscode.window.showErrorMessage(`Pipeline error: ${e.message}`);
+                }
+            }
+        };
+
+        // Start polling after first interval
+        setTimeout(poll, 2000); // First poll after 2s for quicker feedback
+    }
+
+    /**
+     * Create a local workflow that generates and stores documents on the local filesystem.
+     */
+    async createLocalWorkflow(
+        workflowName: string,
+        productName: string,
+        transcript: string,
+        outputFolder: string,
+        autoStart: boolean = true
+    ): Promise<{ workflowId: string } | null> {
+        try {
+            const localWf = await this.localStorage.createLocalWorkflow(
+                workflowName, productName, transcript, outputFolder
+            );
+
+            this._localWorkflows.set(localWf.id, localWf);
+
+            if (autoStart) {
+                this.startLocalGeneration(localWf.id);
+            }
+
+            return { workflowId: localWf.id };
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to create local workflow: ${e.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Start generating documents for a local workflow.
+     */
+    startLocalGeneration(workflowId: string): void {
+        this._currentLocalWorkflowId = workflowId;
+
+        this.localStorage.startGeneration(
+            workflowId,
+            // onProgress
+            (wf) => {
+                this.events.fire('local-workflow-updated', { workflowId: wf.id, workflow: wf });
+            },
+            // onComplete
+            (wf) => {
+                this.events.fire('local-workflow-completed', { workflowId: wf.id, workflow: wf });
+                const folderPath = wf.outputFolder;
+                vscode.window.showInformationMessage(
+                    `✅ All ${wf.totalSteps} documents generated! Saved to: ${folderPath}`,
+                    'Open Folder'
+                ).then(choice => {
+                    if (choice === 'Open Folder') {
+                        vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(folderPath));
+                    }
+                });
+            }
+        );
+    }
+
+    /**
+     * Get a local workflow by ID.
+     */
+    getLocalWorkflow(workflowId: string): LocalWorkflow | undefined {
+        return this._localWorkflows.get(workflowId) || this.localStorage.getWorkflow(workflowId);
+    }
+
+    /**
+     * Check if a workflow ID is a local workflow.
+     */
+    isLocalWorkflow(workflowId: string): boolean {
+        return workflowId.startsWith('local_');
+    }
+
+    /**
+     * Get the content of a local document.
+     */
+    getLocalDocumentContent(workflowId: string, docType: string): string | null {
+        // First try to get markdown content
+        const content = this.localStorage.readDocumentFile(workflowId, docType, 'markdown');
+        return content;
+    }
+
+    /**
+     * Read a local document file in any format.
+     */
+    readLocalDocumentFile(workflowId: string, docType: string, format: 'markdown' | 'json' | 'html'): string | null {
+        return this.localStorage.readDocumentFile(workflowId, docType, format);
+    }
+
+    /**
+     * Delete a local workflow.
+     */
+    async deleteLocalWorkflow(workflowId: string): Promise<boolean> {
+        const result = await this.localStorage.deleteWorkflow(workflowId);
+        if (result) {
+            this._localWorkflows.delete(workflowId);
+            if (this._currentLocalWorkflowId === workflowId) {
+                this._currentLocalWorkflowId = null;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Open a local document file in VS Code editor.
+     */
+    async openLocalDocument(workflowId: string, docType: string, format: 'markdown' | 'json' | 'html' = 'markdown'): Promise<void> {
+        const wf = this.getLocalWorkflow(workflowId);
+        if (!wf) { return; }
+
+        const doc = wf.documents.find(d => d.type === docType);
+        if (!doc?.filePaths) { return; }
+
+        const filePath = doc.filePaths[format];
+        if (!filePath) { return; }
+
+        try {
+            const doc2 = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+            await vscode.window.showTextDocument(doc2, vscode.ViewColumn.Beside);
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`Failed to open document: ${e.message}`);
+        }
+    }
+
+    /**
+     * Open the workflow output folder in the file explorer.
+     */
+    openLocalWorkflowFolder(workflowId: string): void {
+        const wf = this.getLocalWorkflow(workflowId);
+        if (!wf) { return; }
+        vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(wf.outputFolder));
+    }
+
     dispose() {
         this.stopPolling();
         this.events.dispose();
+        this.localStorage.dispose();
     }
 }
 

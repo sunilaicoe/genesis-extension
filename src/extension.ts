@@ -90,13 +90,21 @@ export function activate(context: vscode.ExtensionContext) {
         WorkflowPanel.open(context.extensionUri, workflowService);
     });
     WorkflowDetailPanel.setOnViewDocument((wfName, wfId, docType) => {
-        DocumentPreviewPanel.open(context.extensionUri, workflowService, wfId, wfName, docType);
+        if (workflowService.isLocalWorkflow(wfId)) {
+            workflowService.openLocalDocument(wfId, docType, 'markdown');
+        } else {
+            DocumentPreviewPanel.open(context.extensionUri, workflowService, wfId, wfName, docType);
+        }
     });
     WorkflowDetailPanel.setOnOpenEditor((wfId, wfName) => {
         WorkflowEditorPanel.open(context.extensionUri, workflowService, wfId, wfName);
     });
     WorkflowDetailPanel.setOnExport((wfId, wfName) => {
-        ExportDialogModal.open(context.extensionUri, workflowService, wfId, wfName);
+        if (workflowService.isLocalWorkflow(wfId)) {
+            workflowService.openLocalWorkflowFolder(wfId);
+        } else {
+            ExportDialogModal.open(context.extensionUri, workflowService, wfId, wfName);
+        }
     });
     WorkflowDetailPanel.setOnNewProject(() => NewWorkflowModal.open(context.extensionUri, workflowService));
 
@@ -108,10 +116,18 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Wire WorkflowEditorPanel callbacks
     WorkflowEditorPanel.setOnViewDocument((wfName, wfId, docType) => {
-        DocumentPreviewPanel.open(context.extensionUri, workflowService, wfId, wfName, docType);
+        if (workflowService.isLocalWorkflow(wfId)) {
+            workflowService.openLocalDocument(wfId, docType, 'markdown');
+        } else {
+            DocumentPreviewPanel.open(context.extensionUri, workflowService, wfId, wfName, docType);
+        }
     });
     WorkflowEditorPanel.setOnExport((wfId, wfName) => {
-        ExportDialogModal.open(context.extensionUri, workflowService, wfId, wfName);
+        if (workflowService.isLocalWorkflow(wfId)) {
+            workflowService.openLocalWorkflowFolder(wfId);
+        } else {
+            ExportDialogModal.open(context.extensionUri, workflowService, wfId, wfName);
+        }
     });
 
     // Register sidebar provider
