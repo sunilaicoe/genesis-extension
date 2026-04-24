@@ -62,9 +62,11 @@ export class NewWorkflowModal {
             return;
         }
 
-        // ─── SINGLE PATH: Genesis Cloud Pipeline → Save to Local Folder ───────
-        // Same AI output is stored both in the cloud AND saved locally.
-        // The detail panel opens IMMEDIATELY and shows live pipeline progress.
+        // ─── CLOUD PIPELINE → SAVE LOCALLY → DELETE FROM CONVEX ───────
+        // 1. Cloud AI pipeline generates real AI documents
+        // 2. All artifacts are saved to the local folder
+        // 3. Cloud workflow/artifacts are DELETED from Convex DB
+        // Result: Real AI output, stored locally only, nothing in Convex.
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: `Genesis Pipeline: "${name}"`,
@@ -162,8 +164,8 @@ export class NewWorkflowModal {
             <div class="overlay">
                 <div class="modal">
                     <div class="modal-header">
-                        <h2>Create New Workflow <span style="font-size:.5625rem;font-weight:700;color:#61dac1;text-transform:uppercase;letter-spacing:.06em;margin-left:8px;padding:3px 10px;background:rgba(97,218,193,.1);border:1px solid rgba(97,218,193,.2);border-radius:9999px">Cloud + Local</span></h2>
-                        <p>Genesis AI generates 20 SDLC documents via the cloud pipeline → saved to your local folder</p>
+                        <h2>Create New Workflow <span style="font-size:.5625rem;font-weight:700;color:#61dac1;text-transform:uppercase;letter-spacing:.06em;margin-left:8px;padding:3px 10px;background:rgba(97,218,193,.1);border:1px solid rgba(97,218,193,.2);border-radius:9999px">Cloud AI → Local</span></h2>
+                        <p>AI generates 20 SDLC documents via cloud pipeline → saved to your local folder (not stored in any database)</p>
                     </div>
                     <div class="modal-body">
                         ${connected
@@ -172,7 +174,7 @@ export class NewWorkflowModal {
                         }
                         <div class="info-box">
                             <span class="material-symbols-outlined">auto_awesome</span>
-                            <p>Your transcript is analyzed by <strong>20 specialized AI agents</strong> (powered by Google Gemini). Every document is <strong>saved to your local folder</strong> AND stored in the cloud — same output everywhere.</p>
+                            <p>Your transcript is analyzed by <strong>20 specialized AI agents</strong>. The generated documents are <strong>saved to your local folder only</strong> — cloud data is automatically cleaned up after download.</p>
                         </div>
                         <div class="field-group">
                             <label class="field-label">Workflow Name *</label>

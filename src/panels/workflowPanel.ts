@@ -26,12 +26,23 @@ export class WorkflowPanel {
                     if (WorkflowPanel._newWorkflow) WorkflowPanel._newWorkflow();
                     break;
                 case 'delete-workflow':
-                    vscode.window.showWarningMessage(`Delete "${message.name}" permanently?`, { modal: true }, 'Delete').then(s => {
-                        if (s === 'Delete') this._service.deleteWorkflow(message.id);
+                    vscode.window.showWarningMessage(`Delete "${message.name}" permanently?`, { modal: true }, 'Delete').then(async s => {
+                        if (s === 'Delete') {
+                            if (this._service.isLocalWorkflow(message.id)) {
+                                await this._service.deleteLocalWorkflow(message.id);
+                            } else {
+                                await this._service.deleteWorkflow(message.id);
+                            }
+                            this._update();
+                        }
                     });
                     break;
                 case 'start-pipeline':
-                    this._service.startPipeline(message.id);
+                    if (this._service.isLocalWorkflow(message.id)) {
+                        this._service.startLocalGeneration(message.id);
+                    } else {
+                        this._service.startPipeline(message.id);
+                    }
                     break;
                 case 'refresh':
                     this._service.fetchWorkflows();
@@ -39,7 +50,8 @@ export class WorkflowPanel {
             }
         });
         const eventSub = service.onEvent(({ type }) => {
-            if (type === 'workflows-updated' || type === 'pipeline-status-updated') {
+            if (type === 'workflows-updated' || type === 'pipeline-status-updated' ||
+                type === 'local-workflow-updated' || type === 'local-workflow-completed') {
                 this._update();
             }
         });
@@ -94,7 +106,8 @@ export class WorkflowPanel {
 
     private _getHtml(): string {
         const workflows = this._service.getWorkflows();
-        const total = workflows.length;
+        const localWorkflows = this._service.getLocalWorkflowsList();
+        const total = workflows.length + localWorkflows.length;
 
         const wfCardsHtml = workflows.map(wf => {
             const safeName = wf.workflowName.replace(/'/g, "\\'").replace(/"/g, '&quot;');
@@ -138,6 +151,48 @@ export class WorkflowPanel {
                 </div>
             </div>`;
         }).join('');
+
+        // Local workflow cards
+        const localCardsHtml = localWorkflows.map(wf => {
+            const safeName = (wf.workflowName || wf.productName).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const isRunning = wf.status === 'running';
+            const isFailed = wf.status === 'failed';
+            const isPending = wf.status === 'pending';
+            const isCompleted = wf.status === 'completed';
+            const completedDocs = wf.documents.filter(d => d.status === 'completed').length;
+
+            const badgeCls = isRunning ? 'b-run' : isCompleted ? 'b-done' : isFailed ? 'b-err' : 'b-pend';
+            const badgeText = isRunning ? '● Running' : isCompleted ? '✓ Completed' : isFailed ? '✕ Failed' : '◎ Pending';
+
+            return `
+            <div class="wf-card" data-status="${wf.status}" data-search="${(wf.workflowName + ' ' + wf.productName + ' ' + (wf.description || '')).toLowerCase()}" data-input="text">
+                ${isRunning ? '<div class="wf-progress-strip"><div class="wf-progress-strip-fill"></div></div>' : ''}
+                <div class="wf-card-inner" onclick="handleAction('open-workflow','${wf.id}','${safeName}')">
+                    <div class="wf-card-top">
+                        <div class="wf-input-icon" style="background:rgba(168,85,247,.15);color:#a855f7"><span class="material-symbols-outlined">folder</span></div>
+                        <div class="wf-card-info">
+                            <div class="wf-card-name-row">
+                                <h3 class="wf-card-name">${wf.productName || wf.workflowName}</h3>
+                                <span class="wf-badge ${badgeCls}">${isRunning ? '<span class="wf-badge-spinner"></span>' : ''}${badgeText}</span>
+                                <span class="wf-badge" style="background:rgba(168,85,247,.1);color:#a855f7;font-size:.45rem">LOCAL</span>
+                            </div>
+                            ${wf.description ? `<p class="wf-card-desc">${wf.description}</p>` : ''}
+                            <div class="wf-card-meta">
+                                <span class="wf-meta-time">${this._timeAgo(wf.createdAt)}</span>
+                                <span class="wf-meta-tag">Local</span>
+                                <span class="wf-meta-artifacts">📄 ${completedDocs}/${wf.totalSteps}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="wf-card-actions">
+                        <button class="wf-act-open" title="Open" onclick="event.stopPropagation();handleAction('open-workflow','${wf.id}','${safeName}')"><span class="material-symbols-outlined">open_in_new</span> Open</button>
+                        <button class="wf-act-delete" title="Delete" onclick="event.stopPropagation();handleAction('delete-workflow','${wf.id}','${safeName}')"><span class="material-symbols-outlined">delete</span></button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+
+        const allCardsHtml = wfCardsHtml + localCardsHtml;
 
         return /*html*/ `
         <!DOCTYPE html>
@@ -292,9 +347,9 @@ export class WorkflowPanel {
                 </div>
 
                 <!-- WORKFLOW CARDS -->
-                ${workflows.length > 0 ? `
+                ${total > 0 ? `
                 <div class="wf-cards">
-                    ${wfCardsHtml}
+                    ${allCardsHtml}
                 </div>
                 ` : `
                 <div class="empty">
